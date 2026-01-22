@@ -19,7 +19,15 @@ def run_experiment(name, model, train_loader, val_loader, test_tensor, y_test, c
     model, _ = train_model(model, train_loader, val_loader, config, criterion, device)
     metrics = evaluate_model(model, test_tensor, y_test, device)
     print_metrics(metrics, f"{name} Results")
-    torch.save(model.state_dict(), f"{name.replace(' ', '_').lower()}.pt")
+    
+    save_dir = "."
+    if os.path.exists("/content/drive/MyDrive"):
+        save_dir = "/content/drive/MyDrive/FAIIA_Models"
+        os.makedirs(save_dir, exist_ok=True)
+    
+    save_path = os.path.join(save_dir, f"{name.replace(' ', '_').lower()}.pt")
+    torch.save(model.state_dict(), save_path)
+    print(f"Model saved to {save_path}")
     return metrics
 
 def main():

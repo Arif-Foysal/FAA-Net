@@ -91,8 +91,15 @@ def main():
     print_metrics(metrics, "EDANv3 Test Results")
 
     # Save model
-    torch.save(model.state_dict(), 'edan_v3_main.pt')
-    print("\nModel saved to edan_v3_main.pt")
+    save_dir = "."
+    if os.path.exists("/content/drive/MyDrive"):
+        save_dir = "/content/drive/MyDrive/FAIIA_Models"
+        os.makedirs(save_dir, exist_ok=True)
+        print(f"\nSaving model to Google Drive: {save_dir}")
+    
+    save_path = os.path.join(save_dir, 'edan_v3_main.pt')
+    torch.save(model.state_dict(), save_path)
+    print(f"Model saved to {save_path}")
 
 if __name__ == "__main__":
     main()
