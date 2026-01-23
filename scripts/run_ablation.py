@@ -35,6 +35,11 @@ def run_experiment(name, model, train_loader, val_loader, test_tensor, y_test, c
     save_predictions(y_test, y_probs, pred_path)
     print(f"Predictions saved to {pred_path}")
 
+    # Save Training History
+    history_path = os.path.join(save_dir, f"{name.replace(' ', '_').lower()}_history.csv")
+    pd.DataFrame(history).to_csv(history_path, index=False)
+    print(f"History saved to {history_path}")
+
     return metrics, history
 
 def main():
@@ -76,15 +81,9 @@ def main():
     # --- Experiment 2: Vanilla DNN + Focal Loss ---
     model_2 = VanillaDNN_Ablation(input_dim=input_dim).to(device)
     criterion_2 = ImbalanceAwareFocalLoss_Logits(class_counts=class_counts, gamma=2.0)
-    results['Vanilla DNN + Focal'], history_vanilla = run_experiment(
+    results['Vanilla DNN + Focal'], _ = run_experiment(
         "VanillaDNN_Focal", model_2, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_2, device
     )
-    # Save Vanilla History
-    save_training_history_path = "vanilladnn_history.csv"
-    if os.path.exists("/content/drive/MyDrive/FAIIA_Models"):
-        save_training_history_path = os.path.join("/content/drive/MyDrive/FAIIA_Models", "vanilladnn_history.csv")
-    pd.DataFrame(history_vanilla).to_csv(save_training_history_path, index=False)
-    print(f"Saved Vanilla DNN history to {save_training_history_path}")
 
     # --- Setup for EDAN Ablation (Prototypes) ---
     minority_mask = y_train.values == 1
