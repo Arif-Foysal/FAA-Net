@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 from core.config import RANDOM_STATE
 from core.data_loader import load_and_preprocess_data
-from core.utils import set_all_seeds, evaluate_model, print_metrics
+from core.utils import set_all_seeds, evaluate_model, print_metrics, save_predictions
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
 import xgboost as xgb
 import lightgbm as lgb
@@ -74,6 +74,11 @@ def main():
         os.makedirs(save_dir, exist_ok=True)
 
     joblib.dump(xgb_model, os.path.join(save_dir, 'xgboost_baseline.joblib'))
+    
+    # Save Predictions
+    xgb_probs = xgb_model.predict_proba(X_test_scaled)[:, 1]
+    save_predictions(y_test, xgb_probs, os.path.join(save_dir, 'xgboost_predictions.npz'))
+
 
     # --- LightGBM ---
     print("\n--- Training LightGBM ---")
@@ -91,6 +96,10 @@ def main():
     print_metrics(lgb_metrics, "LightGBM Results")
     results['LightGBM'] = lgb_metrics
     joblib.dump(lgb_model, os.path.join(save_dir, 'lightgbm_baseline.joblib'))
+
+    # Save Predictions
+    lgb_probs = lgb_model.predict_proba(X_test_scaled)[:, 1]
+    save_predictions(y_test, lgb_probs, os.path.join(save_dir, 'lightgbm_predictions.npz'))
 
     # Summary
     print("\n=== Baseline Models Summary ===")

@@ -12,12 +12,12 @@ from core.ablation import VanillaDNN_Ablation, EDANv3_Ablation
 from core.model import MinorityPrototypeGenerator
 from core.loss import ImbalanceAwareFocalLoss_Logits
 from core.trainer import train_model
-from core.utils import set_all_seeds, evaluate_model, print_metrics
+from core.utils import set_all_seeds, evaluate_model, print_metrics, save_predictions
 
 def run_experiment(name, model, train_loader, val_loader, test_tensor, y_test, config, criterion, device):
     print(f"\n--- Running Experiment: {name} ---")
     model, _ = train_model(model, train_loader, val_loader, config, criterion, device)
-    metrics = evaluate_model(model, test_tensor, y_test, device)
+    metrics, y_probs, y_pred = evaluate_model(model, test_tensor, y_test, device)
     print_metrics(metrics, f"{name} Results")
     
     save_dir = "."
@@ -25,9 +25,16 @@ def run_experiment(name, model, train_loader, val_loader, test_tensor, y_test, c
         save_dir = "/content/drive/MyDrive/FAIIA_Models"
         os.makedirs(save_dir, exist_ok=True)
     
+    # Save Model
     save_path = os.path.join(save_dir, f"{name.replace(' ', '_').lower()}.pt")
     torch.save(model.state_dict(), save_path)
     print(f"Model saved to {save_path}")
+
+    # Save Predictions (for Ablation Table T3 and Analysis)
+    pred_path = os.path.join(save_dir, f"{name.replace(' ', '_').lower()}_predictions.npz")
+    save_predictions(y_test, y_probs, pred_path)
+    print(f"Predictions saved to {pred_path}")
+
     return metrics
 
 def main():

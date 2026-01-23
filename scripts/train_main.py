@@ -8,9 +8,9 @@ import torch.nn as nn
 from core.config import V3_CONFIG, RANDOM_STATE
 from core.data_loader import load_and_preprocess_data, create_dataloaders
 from core.model import EDANv3, MinorityPrototypeGenerator
-from core.loss import ImbalanceAwareFocalLoss
+from core.loss import ImbalanceAwareFocalLoss_Logits
 from core.trainer import train_model
-from core.utils import set_all_seeds, evaluate_model, print_metrics
+from core.utils import set_all_seeds, evaluate_model, print_metrics, save_training_history, save_predictions
 
 def main():
     print("="*60)
@@ -64,7 +64,7 @@ def main():
         focal_alpha=V3_CONFIG['focal_alpha'],
         focal_gamma=V3_CONFIG['focal_gamma'],
         num_classes=1,
-        output_logits=False # Main model uses Sigmoid
+        output_logits=True # Use Logits for stability (consistent with Ablation)
     ).to(device)
     
     # Initialize prototypes
@@ -73,9 +73,9 @@ def main():
     print(f"\nModel initialized with {model.count_parameters():,} parameters.")
 
     # 6. Loss Function
-    # For EDANv3 standard, we use ImbalanceAwareFocalLoss (expects probs)
+    # Use ImbalanceAwareFocalLoss_Logits for numerical stability (consistent with Ablation)
     class_counts = [len(X_majority), len(X_minority)]
-    criterion = ImbalanceAwareFocalLoss(
+    criterion = ImbalanceAwareFocalLoss_Logits(
         gamma=V3_CONFIG['focal_gamma'],
         class_counts=class_counts # Use calculated weights
     )
@@ -87,19 +87,33 @@ def main():
 
     # 8. Evaluate
     print("\nEvaluating on Test Set...")
-    metrics = evaluate_model(model, X_test_tensor, y_test, device)
+    metrics, y_probs, y_pred = evaluate_model(model, X_test_tensor, y_test, device)
     print_metrics(metrics, "EDANv3 Test Results")
-
-    # Save model
+    
+    # Save artifacts
     save_dir = "."
     if os.path.exists("/content/drive/MyDrive"):
         save_dir = "/content/drive/MyDrive/FAIIA_Models"
         os.makedirs(save_dir, exist_ok=True)
-        print(f"\nSaving model to Google Drive: {save_dir}")
+        print(f"\nSaving artifacts to Google Drive: {save_dir}")
+        
+    # Save Metrics CSV
+    pd.DataFrame([metrics]).to_csv(os.path.join(save_dir, 'edan_v3_metrics.csv'), index=False)
     
+    # Save Model
     save_path = os.path.join(save_dir, 'edan_v3_main.pt')
     torch.save(model.state_dict(), save_path)
     print(f"Model saved to {save_path}")
+
+    # Save History (for convergence plots F3-F5)
+    hist_path = os.path.join(save_dir, 'edan_v3_history.csv')
+    save_training_history(history, hist_path)
+    print(f"Training history saved to {hist_path}")
+
+    # Save Predictions (for ROC/PR F7-F8 and Per-Attack Analysis)
+    pred_path = os.path.join(save_dir, 'edan_v3_predictions.npz')
+    save_predictions(y_test, y_probs, pred_path)
+    print(f"Predictions saved to {pred_path}")
 
 if __name__ == "__main__":
     main()

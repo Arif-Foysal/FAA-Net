@@ -1,6 +1,7 @@
 
 import torch
 import numpy as np
+import pandas as pd
 import random
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score, confusion_matrix, classification_report
 
@@ -46,7 +47,24 @@ def evaluate_model(model, X_tensor, y_true, device, threshold=0.5):
         'AUC-ROC': roc_auc_score(y_true, y_probs),
         'Avg Precision': average_precision_score(y_true, y_probs)
     }
-    return metrics
+    return metrics, y_probs, y_pred
+
+def save_training_history(history, filename):
+    """Saves training history dict to a CSV or JSON."""
+    # Convert dict of lists to df
+    df = pd.DataFrame(history)
+    df.to_csv(filename, index=False)
+
+def save_predictions(y_true, y_probs, filename):
+    """Saves ground truth and probabilities for ROC/Recall analysis."""
+    data = {
+        'y_true': y_true,
+        'y_probs': y_probs
+    }
+    if isinstance(y_true, (pd.Series, pd.DataFrame)):
+         data['y_true'] = y_true.values
+    
+    np.savez(filename, **data)
 
 def print_metrics(metrics, title="Evaluation Results"):
     print(f"\n{title}:")
