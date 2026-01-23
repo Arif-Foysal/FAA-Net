@@ -1,0 +1,5 @@
+,F1-Score
+Vanilla DNN + BCE,0.82
+Vanilla DNN + Focal,0.85
+FAIIA + BCE,0.9
+FAIIA + Focal,0.96

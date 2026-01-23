@@ -63,3 +63,12 @@ from core.model import EDANv3
 ```
 # FAA-Net
 # FAA-Net
+Table 1: Overall Metrics (F1, Recall, Precision, Accuracy, AUC) — your main ablation table.
+Table 2: Per-attack metrics, split by minority (< 5000 samples) vs majority (≥ 5000 samples).
+Figure 1: F1/Recall vs Epoch for Vanilla DNN and FAIIA models.
+Figure 2: PR curves per model.
+Figure 3: ROC curves per model.
+Figure 4: Minority detection comparison (bar plot of Recall per rare attack).
+Figure 5: Majority detection comparison (bar plot per common attack).
+Figure 6: Convergence plot (Loss vs Epoch).
+Figure 7: Ablation comparison (FAIIA w/o prototypes, w/o attention, w/ BCE, w/ Focal).

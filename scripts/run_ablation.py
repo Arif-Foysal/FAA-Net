@@ -16,7 +16,7 @@ from core.utils import set_all_seeds, evaluate_model, print_metrics, save_predic
 
 def run_experiment(name, model, train_loader, val_loader, test_tensor, y_test, config, criterion, device):
     print(f"\n--- Running Experiment: {name} ---")
-    model, _ = train_model(model, train_loader, val_loader, config, criterion, device)
+    model, history = train_model(model, train_loader, val_loader, config, criterion, device)
     metrics, y_probs, y_pred = evaluate_model(model, test_tensor, y_test, device)
     print_metrics(metrics, f"{name} Results")
     
@@ -35,7 +35,7 @@ def run_experiment(name, model, train_loader, val_loader, test_tensor, y_test, c
     save_predictions(y_test, y_probs, pred_path)
     print(f"Predictions saved to {pred_path}")
 
-    return metrics
+    return metrics, history
 
 def main():
     print("="*60)
@@ -69,16 +69,22 @@ def main():
     # --- Experiment 1: Vanilla DNN + BCE ---
     model_1 = VanillaDNN_Ablation(input_dim=input_dim).to(device)
     criterion_1 = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    results['Vanilla DNN + BCE'] = run_experiment(
+    results['Vanilla DNN + BCE'], _ = run_experiment(
         "VanillaDNN_BCE", model_1, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_1, device
     )
 
     # --- Experiment 2: Vanilla DNN + Focal Loss ---
     model_2 = VanillaDNN_Ablation(input_dim=input_dim).to(device)
     criterion_2 = ImbalanceAwareFocalLoss_Logits(class_counts=class_counts, gamma=2.0)
-    results['Vanilla DNN + Focal'] = run_experiment(
+    results['Vanilla DNN + Focal'], history_vanilla = run_experiment(
         "VanillaDNN_Focal", model_2, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_2, device
     )
+    # Save Vanilla History
+    save_training_history_path = "vanilladnn_history.csv"
+    if os.path.exists("/content/drive/MyDrive/FAIIA_Models"):
+        save_training_history_path = os.path.join("/content/drive/MyDrive/FAIIA_Models", "vanilladnn_history.csv")
+    pd.DataFrame(history_vanilla).to_csv(save_training_history_path, index=False)
+    print(f"Saved Vanilla DNN history to {save_training_history_path}")
 
     # --- Setup for EDAN Ablation (Prototypes) ---
     minority_mask = y_train.values == 1
@@ -92,7 +98,7 @@ def main():
     ).to(device)
     model_3.faiia.initialize_all_prototypes(prototypes, device)
     criterion_3 = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    results['FAIIA + BCE'] = run_experiment(
+    results['FAIIA + BCE'], _ = run_experiment(
         "FAIIA_BCE", model_3, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_3, device
     )
 
@@ -102,7 +108,7 @@ def main():
     ).to(device)
     model_4.faiia.initialize_all_prototypes(prototypes, device)
     criterion_4 = ImbalanceAwareFocalLoss_Logits(class_counts=class_counts, gamma=2.0)
-    results['FAIIA + Focal'] = run_experiment(
+    results['FAIIA + Focal'], _ = run_experiment(
         "FAIIA_Focal", model_4, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_4, device
     )
 
