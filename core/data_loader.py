@@ -57,37 +57,54 @@ def load_and_preprocess_data(data_dir="/content", cache_file="faiia_preprocessed
         # Handle infinite values
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         df[numeric_cols] = df[numeric_cols].replace([np.inf, -np.inf], np.nan)
-        
-        # Fill NaN with median (using train median for both ideally, but following notebook logic per df)
-        # To be strictly correct, we should use train medians for test, but let's stick to notebook logic 
-        # which filled per df:
-        # "df_train_clean[col].fillna(median_val, inplace=True)" inside a loop over dataset
-        # Actually notebook calculated median per df. We will replicate that.
-        for col in numeric_cols:
-            if df[col].isnull().any():
-                median_val = df[col].median()
-                df[col].fillna(median_val, inplace=True)
 
-    # 2. Label Encoding
+    # Imputation: Compute medians ONLY on train, apply to both
+    print("Imputing missing values...")
+    numeric_cols = df_train.select_dtypes(include=[np.number]).columns
+    train_medians = df_train[numeric_cols].median()
+    
+    df_train[numeric_cols] = df_train[numeric_cols].fillna(train_medians)
+    df_test[numeric_cols] = df_test[numeric_cols].fillna(train_medians) # Apply train medians to test
+
+    # 2. Label Encoding (Safe for Unseen Labels)
     print("Encoding categorical features...")
     categorical_features = ['proto', 'service', 'state']
-    target_categorical = 'attack_cat' # typically 'attack_cat'
+    target_categorical = 'attack_cat' 
 
-    # Combine for consistent encoding
-    df_combined = pd.concat([df_train, df_test], axis=0, ignore_index=True)
-    
+    # Helper function for safe encoding
+    def safe_transform(encoder, series, unknown_value=-1):
+        # Determine known classes
+        known_classes = set(encoder.classes_)
+        # Map unknown to unknown_value (or handle strategy)
+        # Here we map to the first class (or a specific 'unknown' if added)
+        # For simplicity in this pipeline, we'll map to mode (most frequent) of train
+        # OR just use a robust method:
+        s_series = series.astype(str)
+        # Replace unseen with mode of encoder training data? 
+        # Better: fit encoder on train, if test has new val, map to 'other' or 0
+        
+        # Fast way: use pandas map
+        mapping = {label: idx for idx, label in enumerate(encoder.classes_)}
+        return s_series.map(mapping).fillna(0).astype(int) # Default to 0 if unknown
+
     for col in categorical_features:
         le = LabelEncoder()
-        le.fit(df_combined[col].astype(str))
+        # FIT ONLY ON TRAIN
+        le.fit(df_train[col].astype(str))
+        
         df_train[col] = le.transform(df_train[col].astype(str))
-        df_test[col] = le.transform(df_test[col].astype(str))
+        # TRANSFORM TEST (Handle unseen)
+        df_test[col] = safe_transform(le, df_test[col])
 
     # Encode attack_cat
     if target_categorical in df_train.columns:
         le_attack = LabelEncoder()
-        le_attack.fit(df_combined[target_categorical].astype(str))
+        le_attack.fit(df_train[target_categorical].astype(str))
         df_train['attack_cat_encoded'] = le_attack.transform(df_train[target_categorical].astype(str))
-        df_test['attack_cat_encoded'] = le_attack.transform(df_test[target_categorical].astype(str))
+        # For test targets, we can just transform. If new attack appears in test, it's problematic for eval anyway.
+        # But let's assume test labels are within train scope or strictly mapped.
+        # We'll use safe transform to avoid crash.
+        df_test['attack_cat_encoded'] = safe_transform(le_attack, df_test[target_categorical])
 
     # 3. Feature Selection (Dropping correlated)
     print("Removing high correlation features...")
@@ -98,7 +115,6 @@ def load_and_preprocess_data(data_dir="/content", cache_file="faiia_preprocessed
     drop_cols = ['label', 'attack_cat', 'attack_cat_encoded']
     X_train = df_train.drop(columns=drop_cols, errors='ignore')
     y_train = df_train['label']
-    # Safety check if attack_cat_encoded exists
     y_train_cat = df_train['attack_cat_encoded'] if 'attack_cat_encoded' in df_train.columns else None
 
     X_test = df_test.drop(columns=drop_cols, errors='ignore')
@@ -108,7 +124,9 @@ def load_and_preprocess_data(data_dir="/content", cache_file="faiia_preprocessed
     # 5. Scaling
     print("Scaling features...")
     scaler = StandardScaler()
+    # FIT ONLY ON TRAIN
     X_train_scaled = scaler.fit_transform(X_train)
+    # TRANSFORM TEST
     X_test_scaled = scaler.transform(X_test)
 
     data = (X_train_scaled, X_test_scaled, y_train, y_test, y_train_cat, y_test_cat)

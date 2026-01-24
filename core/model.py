@@ -34,7 +34,12 @@ class FocalModulation(nn.Module):
             self.register_buffer('focal_temp', torch.tensor([1.0]))
 
     def forward(self, attention_scores, minority_prob):
-        focal_weight = self.alpha * torch.pow(1 - minority_prob + 1e-8, self.gamma)
+        # FIXED: Uncertainty-based modulation (Highest when p ~ 0.5)
+        # Old (Incorrect): (1 - p)^gamma
+        # New (Correct): (1 - |p - 0.5| * 2)^gamma
+        uncertainty = 1.0 - torch.abs(minority_prob - 0.5) * 2.0
+        focal_weight = self.alpha * torch.pow(uncertainty + 1e-8, self.gamma)
+        
         focal_weight = focal_weight * self.focal_temp
         while focal_weight.dim() < attention_scores.dim():
             focal_weight = focal_weight.unsqueeze(-1)
@@ -66,13 +71,18 @@ class FAIIAHead(nn.Module):
         self.n_prototypes = n_prototypes
         self.scale = attention_dim ** -0.5
         self.query = nn.Linear(input_dim, attention_dim)
-        self.key = nn.Linear(input_dim, attention_dim)
-        self.value = nn.Linear(input_dim, attention_dim)
+        # Removed Key/Value for Self-Attention as it was scalar
+        # self.key = nn.Linear(input_dim, attention_dim) 
+        # self.value = nn.Linear(input_dim, attention_dim)
+        
+        # Prototype Cross-Attention Keys/Values
         self.prototype_keys = nn.Parameter(torch.randn(n_prototypes, attention_dim) * 0.02)
         self.prototype_values = nn.Parameter(torch.randn(n_prototypes, attention_dim) * 0.02)
         self.prototype_importance = nn.Parameter(torch.ones(n_prototypes) / n_prototypes)
+        
         self.focal_mod = FocalModulation(alpha=focal_alpha, gamma=focal_gamma, learnable=True)
-        self.output_proj = nn.Linear(attention_dim * 2, attention_dim)
+        # Output project from attention_dim (proto only) -> attention_dim
+        self.output_proj = nn.Linear(attention_dim, attention_dim)
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(attention_dim)
 
@@ -84,34 +94,48 @@ class FAIIAHead(nn.Module):
                                      proto_tensor.shape[1], device=proto_tensor.device) * 0.02
                 proto_tensor = torch.cat([proto_tensor, padding], dim=0)
             self.prototype_keys.data = self.query(proto_tensor)
-            self.prototype_values.data = self.value(proto_tensor)
+            # Use query projection for values too or separate? keeping simple
+            self.prototype_values.data = self.query(proto_tensor) 
 
     def forward(self, x, minority_prob=None):
         batch_size = x.shape[0]
-        q = self.query(x)
-        k = self.key(x)
-        v = self.value(x)
-        attention_scores = torch.bmm(q.unsqueeze(1), k.unsqueeze(2)).squeeze(-1)
-        if minority_prob is not None:
-            attention_scores = self.focal_mod(attention_scores, minority_prob)
-        attention_weights = F.softmax(attention_scores * self.scale, dim=-1)
-        attention_weights = self.dropout(attention_weights)
-        self_attended = v * attention_weights
+        q = self.query(x) # (B, dim)
+        
+        # REMOVED: Broken Self-Attention Branch
+        # q (B, dim) . k (B, dim).T -> (B, B) ? No, element-wise was implied but implemented as batch dot
+        # The previous code: bmm(q.unsqueeze(1), k.unsqueeze(2)) -> (B, 1, 1) -> Scalar score
+        # Softmax(Scalar) -> 1.0. 
+        # We drop this entirely.
 
-        proto_scores = torch.matmul(q.unsqueeze(1), self.prototype_keys.T).squeeze(1)
+        # Prototype Cross-Attention
+        # q: (B, dim)
+        # proto_keys: (K, dim)
+        # scores: (B, K)
+        proto_scores = torch.matmul(q, self.prototype_keys.T)
+        
+        # Add prototype importance as bias (broadcasting to batch)
+        # This allows learning which prototypes are generally useful
+        proto_scores = proto_scores + self.prototype_importance.unsqueeze(0)
+        
         if minority_prob is not None:
             proto_scores = self.focal_mod(proto_scores, minority_prob)
-        proto_weights = F.softmax(proto_scores * self.scale, dim=-1) * F.softmax(self.prototype_importance, dim=0)
+            
+        # Attention Weights (B, K) - Softmax ensures sum to 1
+        proto_weights = F.softmax(proto_scores * self.scale, dim=-1) 
+        
         proto_weights = self.dropout(proto_weights)
-        proto_attended = torch.matmul(
-            proto_weights.unsqueeze(1),
-            self.prototype_values.unsqueeze(0).expand(batch_size, -1, -1)
-        ).squeeze(1)
+        
+        # Weighted Sum of Prototypes
+        # weights: (B, K)
+        # values: (K, dim)
+        # out: (B, dim)
+        proto_attended = torch.matmul(proto_weights, self.prototype_values)
 
-        combined = torch.cat([self_attended, proto_attended], dim=-1)
-        output = self.output_proj(combined)
+        # Output Projection
+        output = self.output_proj(proto_attended)
         output = self.layer_norm(output)
-        return output, attention_weights.squeeze(1) if attention_weights.dim() > 1 else attention_weights
+        
+        return output, proto_weights
 
 
 class MultiHeadFAIIA(nn.Module):
