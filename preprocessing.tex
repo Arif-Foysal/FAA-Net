@@ -1,0 +1,42 @@
+\begin{algorithm}[!t]
+\caption{Data Preprocessing Pipeline}
+\label{alg:preprocessing}
+\begin{algorithmic}[1]
+\renewcommand{\algorithmicrequire}{\textbf{Input:}}
+\renewcommand{\algorithmicensure}{\textbf{Output:}}
+\REQUIRE Raw datasets $\mathcal{D}_{\text{train}}^{\text{raw}}$, $\mathcal{D}_{\text{test}}^{\text{raw}}$
+\ENSURE Preprocessed features \& labels: $X_{\text{train}}, y_{\text{train}}, X_{\text{test}}, y_{\text{test}}$
+
+\STATE \textit{1) Data Cleaning:}
+\FOR{$\mathcal{D} \in \{\mathcal{D}_{\text{train}}^{\text{raw}}, \mathcal{D}_{\text{test}}^{\text{raw}}\}$}
+    \STATE Remove \texttt{id} column
+    \STATE Replace missing \texttt{service}: `\texttt{-}' $\rightarrow$ `\texttt{none}'
+    \FOR{each numeric feature $f$}
+        \STATE Replace $\pm\infty \rightarrow \texttt{NaN}$
+        \STATE Impute \texttt{NaN} with median($f$)
+    \ENDFOR
+\ENDFOR
+
+\STATE \textit{2) Categorical Encoding:}
+\STATE Combine: $\mathcal{D}_{\text{all}} \gets \mathcal{D}_{\text{train}}^{\text{raw}} \cup \mathcal{D}_{\text{test}}^{\text{raw}}$
+\FOR{$f \in \{\texttt{proto}, \texttt{service}, \texttt{state}\}$}
+    \STATE Fit LabelEncoder on $\mathcal{D}_{\text{all}}[f]$
+    \STATE Transform $\mathcal{D}_{\text{train}}[f]$ and $\mathcal{D}_{\text{test}}[f]$
+\ENDFOR
+
+\STATE \textit{3) Feature Selection:}
+\STATE Define drop set: $\mathcal{F}_{\text{drop}} = \{\texttt{ct\_dst\_src\_ltm}, \dots, \texttt{sloss}\}$
+\STATE $\mathcal{D}_{\text{train}} \gets \mathcal{D}_{\text{train}} \setminus \mathcal{F}_{\text{drop}}$, $\mathcal{D}_{\text{test}} \gets \mathcal{D}_{\text{test}} \setminus \mathcal{F}_{\text{drop}}$
+
+\STATE \textit{4) Split Features and Labels:}
+\STATE $X_{\text{train}}^{\text{raw}}, y_{\text{train}} \gets \text{features}(\mathcal{D}_{\text{train}}), \mathcal{D}_{\text{train}}[\texttt{label}]$
+\STATE $X_{\text{test}}^{\text{raw}}, y_{\text{test}} \gets \text{features}(\mathcal{D}_{\text{test}}), \mathcal{D}_{\text{test}}[\texttt{label}]$
+
+\STATE \textit{5) Standardization:}
+\STATE Fit StandardScaler $\mathcal{S}$ on $X_{\text{train}}^{\text{raw}}$
+\STATE $X_{\text{train}} \gets \mathcal{S}.\text{transform}(X_{\text{train}}^{\text{raw}})$
+\STATE $X_{\text{test}} \gets \mathcal{S}.\text{transform}(X_{\text{test}}^{\text{raw}})$
+
+\RETURN $X_{\text{train}}, y_{\text{train}}, X_{\text{test}}, y_{\text{test}}$
+\end{algorithmic}
+\end{algorithm}
