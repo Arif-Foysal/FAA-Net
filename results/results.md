@@ -40,7 +40,7 @@ XGBoost Results:
 
 --- Training LightGBM ---
 [LightGBM] [Info] Number of positive: 119341, number of negative: 56000
-[LightGBM] [Info] Auto-choosing row-wise multi-threading, the overhead of testing was 0.005765 seconds.
+[LightGBM] [Info] Auto-choosing row-wise multi-threading, the overhead of testing was 0.005859 seconds.
 You can set `force_row_wise=true` to remove the overhead.
 And if memory is not enough, you can set `force_col_wise=true`.
 [LightGBM] [Info] Total Bins 4809
@@ -62,7 +62,6 @@ LightGBM Results:
 XGBoost   0.896128   0.885632  0.931660  0.908063  0.976454       0.983042
 LightGBM  0.896893   0.885831  0.932983  0.908796  0.977633       0.983866
 
-
 ## Figures I have for now 
 - Convergence plot (Loss vs Epoch) (FAIIA)
 - F1-Score vs Epoch (FAIIA)
@@ -74,37 +73,39 @@ LightGBM  0.896893   0.885831  0.932983  0.908796  0.977633       0.983866
 ## Ablation results
 
 === Consolidated Evaluation Results of All Models ===
+
 | Model | Accuracy | Precision | Recall | F1-Score | AUC-ROC | Avg Precision |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| FAIIA (EDAN v3) | 0.877532 | 0.856562 | 0.933976 | 0.893595 | 0.971650 | 0.979503 |
+| Vanilla DNN + BCE | 0.894573 | 0.897424 | 0.912865 | 0.905079 | 0.972068 | 0.979861 |
+| Vanilla DNN + Focal | 0.904278 | 0.944016 | 0.878232 | 0.909937 | 0.970719 | 0.978926 |
+| FAIIA + BCE | 0.877775 | 0.852796 | 0.940329 | 0.894426 | 0.972467 | 0.979875 |
+| FAIIA + Focal | 0.865824 | 0.830943 | 0.949484 | 0.886267 | 0.970580 | 0.978597 |
 | XGBoost | 0.896128 | 0.885632 | 0.931660 | 0.908063 | 0.976454 | 0.983042 |
 | LightGBM | 0.896893 | 0.885831 | 0.932983 | 0.908796 | 0.977633 | 0.983866 |
-| Vanilla DNN + BCE | 0.894561 | 0.897421 | 0.912843 | 0.905067 | 0.972070 | 0.979862 |
-| Vanilla DNN + Focal | 0.904290 | 0.944018 | 0.878254 | 0.909949 | 0.970721 | 0.978928 |
-| FAIIA + BCE | 0.887808 | 0.870502 | 0.935388 | 0.901779 | 0.972523 | 0.976153 |
-| FAIIA + Focal | 0.874095 | 0.843545 | 0.946969 | 0.892270 | 0.972186 | 0.979489 |
+
 
 
 === Per-attack metrics (Minority < 5000 vs Majority >= 5000) ===
-| Attack ID | Category | Samples | Detection Rate | Type |
+| ID | Attack | Samples | Detection Rate | Type |
 | :--- | :--- | :--- | :--- | :--- |
-| 0 | Normal(FPR) | 37000 | 0.191622 | Majority |
-| 9 | Generic | 18871 | 0.998463 | Majority |
-| 4 | Exploits | 11132 | 0.970715 | Majority |
-| 6 | Fuzzers | 6062 | 0.609865 | Majority |
-| 3 | DoS | 4089 | 0.979702 | Minority |
-| 1 | Reconnaissance | 3496 | 0.957952 | Minority |
-| 5 | Analysis | 677 | 0.994092 | Minority |
-| 2 | Backdoor | 583 | 0.989708 | Minority |
-| 8 | Shellcode | 378 | 0.917989 | Minority |
+| 0 | Normal | 37000 | 0.778622 | Majority |
+| 9 | Generic | 18871 | 0.998569 | Majority |
+| 4 | Exploits | 11132 | 0.974308 | Majority |
+| 6 | Fuzzers | 6062 | 0.706038 | Majority |
+| 3 | DoS | 4089 | 0.979213 | Minority |
+| 1 | Reconnaissance | 3496 | 0.981407 | Minority |
+| 5 | Analysis | 677 | 0.998523 | Minority |
+| 2 | Backdoor | 583 | 0.993139 | Minority |
+| 8 | Shellcode | 378 | 0.920635 | Minority |
 | 7 | Worms | 44 | 0.954545 | Minority |
+
 
 
 ## model complexity
 
 === Model Complexity Comparison ===
+
 | Model | Parameters | Inference |
 | :--- | :--- | :--- |
 | Vanilla DNN | 54657 | Fast |
-| FAIIA (EDAN v3) | 142436 | Moderate |
-
+| FAIIA (EDAN v3) | 127844 | Moderate |

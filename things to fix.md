@@ -1,0 +1,4 @@
+- [ ] Confusion Matrix Analysis
+- [ ] all the 77.86% fpr statements
+- [ ] all the detection rate statements for normal
+- [ ] Add confusion matrix photo

@@ -1,0 +1,73 @@
+Summary
+
+The paper proposes FAA-NET with FAIIA, a lightweight deep model for network intrusion detection that seeks to address class imbalance by integrating focal modulation directly into the attention score computation, augmenting it with minority-class prototypes and a difficulty-aware gating mechanism. The method is evaluated on the UNSW-NB15 dataset in a binary setting (Attack vs. Normal) and reports higher recall, especially for minority attack categories, relative to a vanilla DNN, with overall F1 competitive with strong tabular baselines (XGBoost/LightGBM). The authors present ablations to disentangle the contribution of FAIIA versus focal loss, and claim deployment-oriented efficiency.
+Strengths
+
+Technical novelty and innovation
+The core idea of embedding a focal-like term inside attention score computation rather than solely in the loss is interesting and reasonably motivated for long-tail detection tasks.
+Introducing a small set of learnable minority prototypes initialized via K-means is a practical way to encourage sensitivity to rare attack patterns in a batch-insensitive manner.
+The class-conditional gating tied to estimated difficulty (distance to decision boundary) is a sensible mechanism to modulate attention outputs.
+Experimental rigor and validation
+The paper provides a set of ablation variants (Vanilla DNN with/without focal loss; FAIIA with/without focal) that help isolate the role of architectural versus loss-level treatments.
+Multiple metrics are reported (precision, recall, F1, ROC-AUC, Average Precision) and per-attack-category detection rates are presented.
+Clarity of presentation
+The motivation for focusing on recall and minority attack detection is clearly articulated in the context of security requirements.
+The method section enumerates key modules (probability estimator, focal modulation, prototypes, gating) with equations and an algorithmic sketch of the forward pass.
+Significance of contributions
+The emphasis on architectural handling of imbalance for tabular NIDS is valuable and timely, given persistent minority-class detection issues in modern datasets.
+The reported recall gains over vanilla DNN baselines, while trading precision, address an important operational objective for certain deployment contexts.
+Weaknesses
+
+Technical limitations or concerns
+The “self-attention” reduces to a single scalar gate via s_self = ⟨Q,K⟩ with a sigmoid, which is closer to a global feature gate than attention over features; the semantics and benefits relative to standard attention are unclear.
+The focal modulation F(p) increases attention magnitude when the estimated minority probability p is low; this design can exacerbate false positives on the majority class (indeed FPR is 19.16%), and the choice is not theoretically or empirically justified beyond the stated intent to “scrutinize” such samples.
+Key details for the probability estimator training and its coupling to the rest of the network (losses, calibration, stability) are under-specified.
+The prototype initialization via W_K c_j, W_V c_j depends on parameters that are simultaneously learned; the exact initialization chronology and training dynamics are unclear.
+Experimental gaps or methodological issues
+Several internal inconsistencies: feature dimensionality is stated as 33 after preprocessing, yet model complexity is computed for d=196; parameter counts are alternatively reported as ≈134k and ≈142k; per-class detection rates differ markedly across tables (e.g., Fuzzers 0.867 vs. 0.611; Exploits 0.996 vs. 0.971); “FAA-NET achieves 99.43% average detection rate on minority categories” contradicts Table 6 values (e.g., Shellcode 0.918).
+The test split appears majority-attack (45,332 attack vs 37,000 normal), which conflicts with the stated “severe class imbalance” narrative and makes it harder to interpret FPR/precision trade-offs and generalization to real, majority-normal traffic.
+Baseline coverage is narrow (only LightGBM/XGBoost and in-house DNN variants). No comparison to recent tabular DL (e.g., FT-Transformer, TabTransformer, NODE) or imbalance-centric methods (class-balanced loss, effective reweighting, SMOTE variants), nor to NIDS-specific deep baselines (e.g., LuNet).
+No statistical confidence (variance across multiple runs/seeds) is reported; qualitative latency labels (“Fast/Moderate/Slow”) are not informative without concrete throughput/latency numbers.
+Clarity or presentation issues
+Numerous placeholder artifacts (Section ??, missing citations [?], logos) and style elements indicate the manuscript needs significant polishing. The presence of “course submission” language is not appropriate for IEEE Access.
+Equation numbering is inconsistent and sometimes referenced incorrectly; the forward-pass pseudocode references equations that do not align.
+The claim that α can be tuned post-training without retraining is asserted but not empirically supported with sensitivity curves or deployment-time experiments.
+Missing related work or comparisons
+The paper overlooks several relevant lines: prototype/memory networks in tabular contexts, cost-sensitive attention in other domains, and NIDS works that directly target minority-class improvement (e.g., GAN-based augmentation, two-stage detection pipelines).
+Several recent NIDS studies report strong results on UNSW‑NB15; there is no direct, consistent head-to-head with those methods under matched splits and metrics.
+Detailed Comments
+
+Technical soundness evaluation
+The FAIIA concept is plausible, but its formulation collapses “attention” over features to a global scalar gate w_self, which may be functionally similar to a learned squeeze/excitation when compounded with SE blocks. The benefit over more expressive attention for tabular data remains to be demonstrated.
+The focal term F(p) increasing as p decreases is a design choice that clearly increases false alarms on normal traffic (Table 6: ~19% FPR). The paper should show how alternative formulations (e.g., amplifying only near-decision-boundary instances via a band around p≈0.5) impact precision/recall.
+The auxiliary probability estimator’s role is central. However, the paper does not specify whether it is jointly trained with the main classifier, how its gradients are controlled to avoid degenerate solutions, how it is regularized/calibrated, and whether it introduces label leakage or circularity in training.
+Prototype attention is reasonable, but the initialization via K-means on attack-only samples combined with end-to-end fine-tuning warrants a clearer ablation: prototypes off, prototypes frozen, different numbers of prototypes, and an analysis of what these vectors actually capture (e.g., projection of cluster centers, visualization).
+Experimental evaluation assessment
+The dataset statistics and splits are inconsistent: the test set is attack-heavy, which undermines claims about “severe imbalance” at evaluation time and may inflate certain metrics while masking realistic precision/FPR behavior under normal-dominant traffic.
+Reported numbers are not self-consistent across the manuscript (per-class rates, parameter counts). This must be reconciled.
+Only a single run per configuration appears reported; no standard deviations or confidence intervals are included. Given the sensitivity of minority-class detection to random seeds, multiple runs are necessary.
+The “deployment” claims are qualitative; measured per-batch latency, per-sample throughput, and memory footprint on specific CPU/GPU/edge hardware would be much more convincing.
+Threshold selection (θ=0.5) is fixed; presenting PR curves and operating-point analysis, including calibration assessment (e.g., expected calibration error), would better substantiate the recall-first narrative.
+Comparison with related work (using the summaries provided)
+Ensemble baselines in the literature (e.g., 2410.15597) explore a wider range of strategies and often outperform single models on tabular IDS; these should be included or discussed to better position FAIIA’s value.
+LuNet (1909.10031) reports high detection rates with relatively low FPR on UNSW‑NB15; a direct comparison on the same split would contextualize the 19% FPR and the trade-offs FAIIA makes.
+Augmentation-based methods (2308.08803, 2511.07793) target minority-class performance via GANs and two-stage pipelines, often improving macro-F1 and per-class recall substantially; FAIIA should be compared head-to-head or, at minimum, discussed as complementary (architectural imbalance handling plus augmentation).
+Empirical studies on feature engineering and dimensionality trade-offs (2307.01570) suggest that careful feature selection/extraction can materially affect both performance and runtime. Given that the final feature dimensionality is reported as 33, a brief study of the interaction between FAIIA and feature choice would be helpful.
+Discussion of broader impact and significance
+The paper’s emphasis on recall for security-critical environments is appropriate; however, a 19% FPR is likely operationally prohibitive without a downstream triage/filtering system. The work would benefit from a concrete two-tier scenario or cost analysis to justify such trade-offs.
+If refined and validated more rigorously (with consistent data splits, stronger baselines, and multiple runs), FAIIA could be a useful ingredient in IDS pipelines that must prioritize minority-class detection, particularly when integrated with calibration, triage, or multi-stage detection.
+Questions for Authors
+
+Please reconcile the inconsistencies: (a) feature dimensionality (33 vs. d=196 used in complexity), (b) parameter counts (≈134k vs. ≈142k), and (c) per-class detection rates (e.g., Fuzzers/Exploits differ across tables). Which numbers are definitive?
+How is the probability estimator trained and coupled to the main model? Is it jointly optimized, does it receive its own loss, and how is calibration ensured? Have you evaluated sensitivity to its miscalibration?
+Why is F(p) designed to amplify attention when minority probability p is low? Have you tried variants that emphasize samples near p≈0.5 (uncertain region) rather than globally amplifying low-p cases, and how does that affect FPR/recall?
+What is the exact composition of the train/test splits? The reported test set appears attack-heavy. Can you provide stratified per-class counts for both splits and justify how they reflect real-world deployment where normal typically dominates?
+Can you provide concrete latency/throughput measurements (ms/sample, samples/s) on specific hardware (CPU-only and GPU), including memory footprint, to substantiate the edge-deployability claim?
+How does FAIIA compare to class-balanced loss (effective number of samples) and to sampling-based methods (e.g., SMOTE, GAN augmentation) on the same splits? Have you tried combining these with FAIIA?
+Your post-training tunability claim for α is interesting; can you provide a sensitivity analysis where α is changed only at inference, with metrics across operating points, to demonstrate robustness?
+Did you evaluate against more recent tabular DL models (e.g., FT-Transformer, TabTransformer, NODE, CatBoost) and NIDS-specific architectures (e.g., LuNet) under identical preprocessing/splits?
+For the prototype module: how many prototypes are optimal, and what do they encode in practice? Can you visualize prototype nearest neighbors to illustrate learned minority patterns?
+Given the high FPR, do you envision a two-stage system (coarse recall-first, then precision refinement)? If so, can you outline a concrete pipeline and expected end-to-end metrics?
+Overall Assessment
+
+The paper addresses an important and persistent problem in NIDS—detecting rare attacks under severe imbalance—and proposes a conceptually appealing idea: integrate imbalance awareness directly into attention score computation, complemented by learned prototypes and difficulty-aware gating. The focus on recall is well-motivated for security contexts. However, the current manuscript suffers from significant issues that preclude publication in its present form: internal numerical inconsistencies, under-specified training details for the probability estimator, unusually attack-heavy test splits that undermine the imbalance narrative, high false-positive rates without an accompanying triage strategy, and limited baseline coverage and statistical rigor. The “attention” component is closer to a global gating than feature-wise/tabular attention, and the design choices in F(p) appear to contribute directly to the high FPR. The idea is promising, but the work needs substantial revision: ensure consistency and reproducibility, expand baselines (including imbalance-aware losses and augmentation), report multiple runs and calibration, provide quantitative runtime metrics, and more carefully justify the attention design through targeted ablations and alternatives. With these improvements and clearer comparisons to contemporary methods, the contribution could be valuable to the community, particularly for minority-class-centric IDS. As it stands, I recommend a major revision.

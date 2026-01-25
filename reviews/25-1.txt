@@ -1,0 +1,65 @@
+This paper proposes FAA-Net, a compact deep model for network intrusion detection that integrates class-imbalance awareness directly into the attention mechanism. The core component, FAIIA, combines prototype-based cross-attention over minority (attack) prototypes with an uncertainty-driven focal modulation term applied to attention scores, plus a class-conditional gating module conditioned on an auxiliary probability estimator. On UNSW-NB15, FAA-Net achieves the highest recall among evaluated methods, notably improving detection of rare attack types, though at the expense of precision and overall F1 relative to strong tree-based baselines.
+Strengths
+
+Technical novelty and innovation
+Embeds imbalance awareness inside attention scoring rather than only at the loss level, via an uncertainty-driven focal term and minority prototypes.
+Uses prototype-based cross-attention on attack clusters to anchor rare-pattern representation even when batch composition is majority-skewed.
+Class-conditional gating and multi-head focal scaling are thoughtful architectural choices aimed at modulating features by prediction difficulty.
+Experimental rigor and validation
+Provides a clear ablation study (Vanilla DNN ± FAIIA; ± focal loss) that isolates FAIIA’s contribution to recall gains.
+Reports per-attack-type detection rates for rare classes (e.g., Worms, Shellcode), which is important for operational IDS.
+Includes multiple metrics (Recall, F1, AUC, AP) and a confusion matrix, enabling a nuanced reading of trade-offs.
+Clarity of presentation
+Methodology is described with equations and step-by-step data preprocessing; architectural blocks are well-defined.
+Evaluation criteria and the emphasis on recall for security contexts are well motivated and consistently referenced.
+Significance of contributions
+Addresses a practically important challenge (minority/rare attack detection) where false negatives are severe.
+Highlights a deployment-relevant angle: small model size with claimed low-latency inference suitable for edge contexts.
+Weaknesses
+
+Technical limitations or concerns
+The uncertainty-driven focal term appears to scale the entire attention score vector by a sample-wise scalar; with softmax, this largely acts as a temperature change rather than targeted bias toward minority-relevant prototypes.
+Prototypes are learned from all attacks in aggregate rather than per attack subtype; without constraints, learned prototypes may drift toward majority attack modes over training.
+The auxiliary probability estimator p_init is uncalibrated; no analysis of its calibration or robustness is provided despite its central role in gating and focal modulation.
+Experimental gaps or methodological issues
+Evaluation is limited to a single dataset (UNSW-NB15) and binary classification; no cross-dataset/temporal generalization or true multi-class evaluation is provided.
+No comparison to widely used imbalance mitigation baselines (e.g., SMOTE, class-balanced loss, cost-sensitive losses beyond the focal formulation used) or to attention-based NIDS baselines.
+No sensitivity analysis for key hyperparameters (number of prototypes K, α/γ for focal modulation, τ temperature, number of heads), and no statistical significance testing across multiple seeds.
+The strongly increased false positive rate (≈22% on normal traffic) is acknowledged but only qualitatively addressed; no threshold calibration curves or operating-point selection is reported.
+Clarity or presentation issues
+Numerical inconsistencies: parameter counts are reported as both 127,844 and 142,436; Table 3 appears to swap test counts for Analysis vs Backdoor relative to other sections.
+“Imbalance ratio” is used but not explicitly defined; values (0.469, 0.816) seem to be Normal/Attack rather than Attack/Normal, which can confuse readers.
+Claims of “sub-millisecond CPU latency” are not supported with hardware specs, batch sizes, or measurement methodology.
+Missing related work or comparisons
+No discussion of prototypical networks or other prototype-based attention mechanisms; limited engagement with recent attention approaches that condition attention using class tokens/queries (e.g., class-specific queries in encoder-decoder transformers).
+Relevant IDS literature employing GAN-based rebalancing, cost-sensitive/attack-sharing losses, or MOEA-based recall-optimized feature selection is not used as baselines for a fairer positioning.
+Detailed Comments
+
+Technical soundness evaluation
+The FAIIA design is reasonable and plausibly beneficial, yet the focal modulation s_mod = s · (1 + w_focal) applies a uniform multiplicative factor across all prototype logits for a sample. With softmax, this behaves primarily like dynamic temperature scaling (sharpening/flattening), not preferentially shifting attention toward minority-relevant prototypes. Consider additive, per-prototype modulation (e.g., bias terms or prototype-specific gates) conditioned on uncertainty and class priors to induce targeted reweighting.
+Prototype generation from attack-only K-means is sensible for binary IDS; however, the lack of regularization to keep learned prototypes near initial centroids risks drift towards dominant attack sub-modes. A prototype anchoring loss or periodic re-initialization could stabilize them. It would also be valuable to explore per-subtype prototypes (even if the downstream task remains binary) to cover rare sub-clusters explicitly.
+The class-conditional gating is lightweight and coherent with the architecture, but performance hinges on the quality and calibration of p_init. An ECE/Brier analysis and temperature scaling or focal calibration for p_init could strengthen the method.
+Experimental evaluation assessment
+The ablations demonstrate that FAIIA improves recall over a vanilla DNN under both BCE and focal loss, which supports the core claim. However, the concomitant drop in precision is substantial; it would be important to visualize PR curves with operating-point selection and to report results at several recall targets (e.g., 0.90, 0.95) to reflect operational choices.
+Only one dataset is used (UNSW-NB15). Given the domain’s variability, additional datasets (NSL-KDD, CIC-IDS2017/2018) and a multi-class setting would better validate generality and per-attack behavior. Moreover, reporting variance over multiple random seeds would give readers confidence in robustness.
+Efficiency claims (sub-millisecond CPU) should be backed by measured throughput/latency with hardware specs, batch sizes, and environment. Even a small table with median/95th-percentile latencies would help.
+The focal loss class-weighting strategy down-weights the (training) positive class (attacks) because attacks are actually the majority in the training split—this may partly explain why focal reduces recall in the vanilla model. Discussing this interaction (global binary skew vs intra-attack rarity) and experimenting with alternative weights (e.g., per-subtype balancing) would clarify design choices.
+Comparison with related work (using the summaries provided)
+DR-MOFS (feature-selection MOEAs optimized for detection rate) and DeepIDEA (attack-sharing loss) explicitly emphasize recall; including them (or analogous recall-optimized pipelines) as baselines would improve positioning.
+Work such as CSAGC-IDS and other CBAM/cost-sensitive CNNs incorporate attention and class costs; while image/tabular domains differ, these illustrate that attention conditioned on labels/costs is not entirely new. FAA-Net’s novelty is the placement of imbalance-aware modulation inside the attention score path plus prototypes for tabular IDS; a clearer contrast to prototype-attention or class-query transformers (e.g., INTR) would underscore originality.
+AOC-IDS’ contrastive objective with strong zero-day detection indicates alternative strategies for rare/novel attacks. Discussing complementary strengths (FAA-Net is supervised with prototypes vs unsupervised/contrastive) would be valuable.
+Discussion of broader impact and significance
+The focus on maximizing recall at the expense of precision aligns with many SOC priorities; however, a 22% FPR on benign flows would create significant alert load. The paper suggests hybrid/threshold-based deployments; quantitative analysis (precision/alert rates at different thresholds and triage strategies) would make the operational case stronger.
+The method’s compactness is attractive for edge deployment. Providing memory footprint, FLOPs, and an energy estimate would help practitioners assess deployment feasibility on common appliances.
+Questions for Authors
+
+How does the scalar focal modulation within attention differ in effect from a learnable per-sample temperature on softmax? Have you tried additive, per-prototype modulation or prototype-specific gates to more directly bias attention toward minority prototypes?
+How are prototypes constrained during training to avoid drift toward majority attack modes? Did you experiment with prototype anchoring regularizers or per-attack-subtype prototypes, and how sensitive is performance to K?
+What is the calibration quality of the auxiliary probability estimator p_init (e.g., ECE/Brier score), and how does calibration affect gating and focal modulation? Would temperature-scaled or isotonic-calibrated p_init improve performance?
+Can you provide measured latency/throughput with hardware details (CPU model, clock, memory, batch size), as well as FLOPs and model footprint? Sub-millisecond CPU latency may vary widely with environment.
+The reported numbers contain inconsistencies (e.g., parameter count 127,844 vs 142,436; Table 3 test counts for Analysis vs Backdoor). Could you reconcile these and release code to ensure reproducibility?
+How does FAA-Net perform in a multi-class setting (per-attack subtype classification) and on other datasets (NSL-KDD, CIC-IDS2017/2018)? Do the recall gains for rare classes generalize?
+Did you compare against oversampling (SMOTE/ADASYN), class-balanced loss, or recall-optimized feature-selection pipelines (e.g., DR-MOFS) under the same preprocessing to contextualize FAIIA’s benefits?
+Overall Assessment
+
+The paper addresses an important and practical problem in IDS: improving recall on rare attacks under class imbalance. The architectural idea of integrating imbalance-aware modulation directly into attention scoring, together with attack prototypes and class-conditional gating, is interesting and reasonably motivated for tabular NIDS. Empirically, the method achieves the highest recall and strong minority-type detection on UNSW-NB15, though at the cost of precision and overall F1 relative to strong tree-based baselines. However, the experimental scope is limited to a single dataset and binary classification, some numeric inconsistencies remain, and the focal modulation’s effect may largely reduce to dynamic temperature scaling rather than targeted minority emphasis. With expanded evaluation (multi-dataset, multi-class), stronger baseline comparisons, calibration/threshold analyses, clarified implementation details, and sensitivity studies, this work could offer a meaningful contribution. As it stands, the idea is promising but requires additional validation and clarification to meet IEEE Access standards.

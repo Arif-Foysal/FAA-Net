@@ -1,0 +1,66 @@
+Summary
+
+The paper proposes E-DAN v3, a compact neural architecture for network intrusion detection that introduces Focal-Aware Imbalance-Integrated Attention (FAIIA). FAIIA combines uncertainty-driven focal modulation applied directly to attention scores with prototype-based cross-attention (using K-means-initialized minority prototypes) and a class-conditional gating mechanism. On UNSW-NB15, the authors report higher recall than tree-based baselines, particularly on extremely rare attacks, arguing that embedding imbalance-awareness into the attention mechanism improves minority-class detection beyond loss-only approaches.
+Strengths
+
+Technical novelty and innovation
+Integrates focal-like modulation into attention score computation (pre-softmax), which is less explored in tabular intrusion detection compared to standard post-hoc loss reweighting.
+Uses prototype-based cross-attention with K-means-initialized minority-class anchors to promote persistent minority representation during training and inference.
+Introduces a class-conditional gating driven by uncertainty estimates, aiming to emphasize boundary cases common in imbalanced settings.
+Experimental rigor and validation
+Presents ablations intended to disentangle the contributions of FAIIA and focal loss, and reports per-attack detection rates highlighting performance on rare categories.
+Attempts to compare against strong tabular baselines (LightGBM/XGBoost) and discusses precision–recall trade-offs.
+Clarity of presentation
+Provides a detailed architectural description (dimensions, projections, heads, gating, and loss) and a comprehensive preprocessing pipeline.
+Motivates design choices by mapping them to NIDS domain requirements (recall prioritization, edge deployability).
+Significance of contributions
+Addresses a practically important challenge in NIDS (rare attack detection under severe imbalance) with architectural innovation rather than only loss-level changes.
+If validated, the approach could complement tree-based methods where maximum recall is operationally prioritized.
+Weaknesses
+
+Technical limitations or concerns
+Internal inconsistencies between reported aggregate metrics and the provided confusion matrix and per-class “Normal” detection rate (e.g., precision/accuracy values incompatible with TN/FP counts), undermining the reliability of the claims.
+The uncertainty-driven modulation relies on an auxiliary p_init network, but the training dynamics and stability of this component (e.g., supervision, potential degenerate solutions) are not sufficiently explained.
+Prototype selection and maintenance are under-specified (e.g., per-attack vs. aggregated “attack” prototypes in a binary setting; handling prototype collapse; sensitivity to K).
+Experimental gaps or methodological issues
+Baselines are limited relative to the literature: no comparisons with imbalance-aware deep NIDS, graph-based NIDS, or data-level augmentation (e.g., SMOTE, WGAN-GP) which are common in this domain.
+Reliance on a single dataset (UNSW-NB15) with no cross-dataset validation (e.g., CIC-IDS2017, ToN-IoT), making generalization claims premature.
+Inference/latency claims (e.g., “sub-millisecond CPU”) are not backed by measured hardware specifications or reproducible timing experiments; speed is later reported only qualitatively.
+Clarity or presentation issues
+Multiple placeholders and citation gaps ([?], Section ??), inconsistent model naming (FAA-Net vs. E-DAN v3), and mismatched numbers across sections (e.g., per-class counts and ratios).
+Reported AP/AUC values are partially malformed and not consistently presented; label encoding choice for categorical features is not justified versus one-hot encoding for tabular data.
+Missing related work or comparisons
+Limited discussion/comparison against: GAN-based augmentation pipelines (e.g., WGAN-GP variants), graph-temporal/attention NIDS architectures, and prototype-based classifiers in imbalanced tabular settings.
+The work does not situate its attention-with-prototypes idea against recent prototype/attention hybrids and uncertainty-aware architectures beyond vision.
+Detailed Comments
+
+Technical soundness evaluation
+The central idea—focal modulation inside attention scores plus minority prototypes—is interesting and potentially impactful for imbalanced tabular detection. However, the paper’s internal metric inconsistencies (e.g., confusion matrix implying precision ≈0.60 and accuracy ≈0.62, while Table 3 reports precision 0.83 and accuracy 0.87) raise serious concerns about correctness of evaluation and conclusions.
+The auxiliary probability head p_init that drives modulation and gating is not clearly supervised; while it can receive gradients through the main loss via the modulation path, the authors should discuss stability, calibration, and whether explicit auxiliary supervision is used.
+Prototype learning details are sparse: how are prototypes updated, regularized, or prevented from collapsing; are they per-attack-type or pooled across “attack”; sensitivity to K and initialization are not evaluated.
+Experimental evaluation assessment
+The ablations are structured well in principle (Vanilla vs. FAIIA, BCE vs. focal), but because of the metric contradictions, the claimed improvements cannot be trusted without correction.
+Only one dataset is used. Given the breadth of NIDS literature, cross-dataset validation is essential for publication-quality claims.
+Baseline scope is narrow for NIDS: recurrent/temporal, hybrid CNN–LSTM, graph-based, and GAN-augmented pipelines are missing, despite being common and relevant.
+Runtime/latency claims should be quantified on specified hardware with batch sizes, end-to-end times, and confidence intervals; qualitative labels (“Fast/Moderate”) and inconsistent “sub-millisecond CPU” assertions are insufficient.
+Comparison with related work (using the summaries provided)
+Compared to graph- or hybrid approaches (e.g., GTCN-G), the proposed method focuses on tabular MLP-style attention without leveraging flow graphs or temporal structure; a direct quantitative comparison is needed to establish relative benefits.
+GAN-based augmentation pipelines (e.g., PWG-IDS, HybridGuard) explicitly target rare-class improvement via synthetic data; the paper should compare against these or combine FAIIA with such augmentation to test complementarity.
+Prototype-based classifiers in fraud detection (e.g., CPAC) demonstrate that prototypes plus attention can improve interpretability and minority detection; the authors should acknowledge this lineage and differentiate their focal-in-attention mechanism, as well as include appropriate baselines or variants (e.g., prototypes without focal modulation, focal modulation without prototypes).
+Focal modulation networks (vision) are distinct, but their concept underscores that “focal”-style contextual modulation has prior art; a clearer positioning relative to this concept would strengthen the novelty claim.
+Discussion of broader impact and significance
+Improving recall for rare but critical attacks is important. The prototype-based attention could provide interpretability via prototype activation, potentially useful for analysts.
+However, real-world deployment requires precise calibration of false-positive rates; the reported Normal-class detection of ≈22% (if accurate) would be operationally prohibitive without a robust second-stage filter or threshold calibration strategy. The paper should present operating-point analyses (PR curves, threshold tuning) and possibly a hybrid pipeline to manage alert volume.
+Reproducibility and transparency (code, exact seeds, splits, and hyperparameters) are necessary for community value; current placeholders and inconsistencies hinder adoption.
+Questions for Authors
+
+The confusion matrix (TN=8,192; FP=28,808; FN=2,289; TP=43,043) implies precision ≈0.60 and accuracy ≈0.62, which contradicts Table 3 (precision 0.8309, accuracy 0.8658). Similarly, the reported “Normal” detection rate ≈0.2214 conflicts with the aggregate metrics. Please reconcile these discrepancies and provide the exact computation scripts and thresholds used.
+How is the auxiliary p_init network trained and regularized? Is there an explicit auxiliary loss, or is it learned implicitly through gradients via FAIIA? Please discuss calibration of p_init (e.g., ECE/Brier) and its stability across seeds.
+Are the prototypes class-conditional (per attack subtype) or aggregated across all “attack” instances? How sensitive are results to K (number of prototypes), initialization (K-means seeding), and whether prototypes are frozen vs. fully learnable?
+Why was label encoding chosen for categorical features in a tabular setting where one-hot encoding is standard and typically better? Did you evaluate one-hot and its effect on models (especially tree-based)?
+Can you provide measured inference latencies (mean/median/variance) on specified CPU/GPU hardware and batch sizes, along with memory footprints, to substantiate edge-deployability claims?
+Please expand baselines to include: (a) imbalance-aware deep NIDS (e.g., CNN–LSTM with focal/weights), (b) graph-based approaches, and (c) data-level augmentation (SMOTE, WGAN-GP). How does FAIIA compare or combine with these?
+Since operational NIDS require stepwise control of precision–recall trade-offs, can you provide PR curves with threshold calibration strategies (e.g., cost-sensitive thresholds, post-hoc temperature scaling) and show an operating point where false positives are manageable?
+Overall Assessment
+
+The paper tackles an important NIDS problem with a conceptually interesting approach: integrating uncertainty-modulated attention with minority prototypes directly inside the attention mechanism. This has potential and is a plausible direction for improving rare attack detection beyond loss reweighting. However, the current manuscript has serious issues that preclude publication in its present form. Most critically, there are substantial inconsistencies between the reported metrics (precision, accuracy) and the confusion matrix/per-class “Normal” detection rate, which undermines the validity of the main claims. The empirical scope is narrow (single dataset, limited baselines) relative to the standard expected for IEEE Access, and several presentation problems (placeholder citations, inconsistent model naming, numerical inconsistencies) diminish clarity and reproducibility. I encourage the authors to (1) correct and verify all metric computations, (2) expand evaluation to additional datasets and stronger baselines (including imbalance-aware deep, graph-based, and augmentation-based pipelines), (3) provide rigorous runtime measurements, and (4) thoroughly ablate prototype/focal/gating design choices with sensitivity analyses. With these revisions and clearer, consistent results, the core idea could become a valuable contribution.

@@ -1,0 +1,54 @@
+graph LR
+    subgraph Input_Stage [Input Stage]
+        In([Network Flow Features<br/>d=33]) --> BN[Batch Normalization]
+    end
+
+    BN --> FAIIA_Mod
+
+    subgraph Prob_Estimator [Auxiliary Path]
+        ProbEst[Probability Estimator<br/>2-layer MLP] --> Pinit{{p_init}}
+    end
+
+    BN --> ProbEst
+    Pinit -.->|"Uncertainty"| Focal
+
+    subgraph FAIIA_Module [FAIIA Module: Focal-Aware Attention]
+        direction TB
+        Focal[Focal Modulation<br/>α · u^γ]
+        Proto[Minority Prototypes<br/>K=8, K-means init]
+        Attn[Multi-Head Cross-Attention<br/>H=4]
+        
+        Focal --> Attn
+        Proto --> Attn
+        Attn --> Concat[Concat & Project]
+    end
+
+    FAIIA_Mod --- FAIIA_Module
+    Concat --> Post
+
+    subgraph Post_Processing [Gating & Recalibration]
+        Post[Class-Conditional Gate] --> SE[SE Block<br/>red. ratio=4]
+        SE --> ResAdd[Residual Addition]
+    end
+
+    ResAdd --> DeepFE
+
+    subgraph Deep_FE [Deep Feature Extraction]
+        RB1[Residual Block 1<br/>33 &rarr; 256] --> RB2[Residual Block 2<br/>256 &rarr; 128]
+        RB2 --> RB3[Residual Block 3<br/>128 &rarr; 64]
+    end
+
+    RB3 --> Classify
+
+    subgraph Output_Stage [Classification & Loss]
+        Classify[Classification Head<br/>MLP] --> Out([Attack Probability])
+    end
+
+    %% Style classes
+    classDef novel fill:#ffa500,stroke:#333,stroke-width:2px,color:#000
+    classDef standard fill:#f9f9f9,stroke:#333,stroke-width:1px
+    classDef input fill:#add8e6,stroke:#333,stroke-width:1px
+
+    class FAIIA_Module novel
+    class In,Out input
+    class BN,ProbEst,Post,SE,ResAdd,RB1,RB2,RB3,Classify standard

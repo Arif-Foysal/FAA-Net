@@ -1,0 +1,173 @@
+% =====================================================================
+% ALGORITHM 1: Data Preprocessing Pipeline
+% =====================================================================
+
+\begin{algorithm}[htbp]
+\caption{Data Preprocessing Pipeline for UNSW-NB15}
+\label{alg:preprocessing}
+\begin{algorithmic}[1]
+\REQUIRE Training set $\mathcal{D}_{\text{train}}$, Test set $\mathcal{D}_{\text{test}}$
+\ENSURE Scaled feature matrices $X_{\text{train}}$, $X_{\text{test}}$, labels $y_{\text{train}}$, $y_{\text{test}}$
+
+\STATE \textbf{// Data Cleaning}
+\FOR{$\mathcal{D} \in \{\mathcal{D}_{\text{train}}, \mathcal{D}_{\text{test}}\}$}
+    \STATE Remove identifier columns (e.g., \texttt{id})
+    \STATE Replace missing service values: $\texttt{service} = \texttt{service} \cup \{\text{`none'}\}$
+    \STATE Replace infinite values: $\mathcal{D}[\text{numeric}] \leftarrow \text{replace}([\pm\infty], \text{NaN})$
+\ENDFOR
+
+\STATE \textbf{// Missing Value Imputation}
+\STATE Compute feature medians: $\mu_{\text{med}} \leftarrow \text{median}(\mathcal{D}_{\text{train}}[\text{numeric}])$
+\STATE $\mathcal{D}_{\text{train}}[\text{numeric}] \leftarrow \text{fillna}(\mathcal{D}_{\text{train}}[\text{numeric}], \mu_{\text{med}})$
+\STATE $\mathcal{D}_{\text{test}}[\text{numeric}] \leftarrow \text{fillna}(\mathcal{D}_{\text{test}}[\text{numeric}], \mu_{\text{med}})$ \COMMENT{Use train medians}
+
+\STATE \textbf{// Categorical Encoding}
+\FOR{feature $c \in \{\texttt{proto}, \texttt{service}, \texttt{state}\}$}
+    \STATE Fit encoder: $\text{LE}_c \leftarrow \text{LabelEncoder}().\text{fit}(\mathcal{D}_{\text{train}}[c])$
+    \STATE $\mathcal{D}_{\text{train}}[c] \leftarrow \text{LE}_c.\text{transform}(\mathcal{D}_{\text{train}}[c])$
+    \STATE $\mathcal{D}_{\text{test}}[c] \leftarrow \text{SafeTransform}(\text{LE}_c, \mathcal{D}_{\text{test}}[c])$ \COMMENT{Handle unseen values}
+\ENDFOR
+
+\STATE \textbf{// Feature Selection}
+\STATE $\mathcal{F}_{\text{drop}} \leftarrow \{\texttt{ct\_dst\_src\_ltm}, \texttt{ct\_ftp\_cmd}, \ldots, \texttt{sloss}\}$ \COMMENT{9 correlated features}
+\STATE $\mathcal{D}_{\text{train}} \leftarrow \mathcal{D}_{\text{train}} \setminus \mathcal{F}_{\text{drop}}$
+\STATE $\mathcal{D}_{\text{test}} \leftarrow \mathcal{D}_{\text{test}} \setminus \mathcal{F}_{\text{drop}}$
+
+\STATE \textbf{// Feature Standardization}
+\STATE Initialize scaler: $\mathcal{S} \leftarrow \text{StandardScaler}()$
+\STATE Fit on training data: $\mathcal{S}.\text{fit}(X_{\text{train}})$ \COMMENT{$X = \mathcal{D} \setminus \{\texttt{label}, \texttt{attack\_cat}\}$}
+\STATE $X_{\text{train}} \leftarrow \mathcal{S}.\text{transform}(X_{\text{train}})$
+\STATE $X_{\text{test}} \leftarrow \mathcal{S}.\text{transform}(X_{\text{test}})$ \COMMENT{Use train statistics}
+
+\RETURN $X_{\text{train}} \in \mathbb{R}^{175341 \times 33}$, $X_{\text{test}} \in \mathbb{R}^{82332 \times 33}$, $y_{\text{train}}$, $y_{\text{test}}$
+\end{algorithmic}
+\end{algorithm}
+
+% =====================================================================
+% ALGORITHM 2: Minority Prototype Generation
+% =====================================================================
+
+\begin{algorithm}[htbp]
+\caption{Minority Class Prototype Generation}
+\label{alg:prototypes}
+\begin{algorithmic}[1]
+\REQUIRE Scaled training features $X_{\text{train}} \in \mathbb{R}^{N \times d}$, labels $y_{\text{train}} \in \{0,1\}^N$, number of prototypes $K$
+\ENSURE Prototype matrix $\mathcal{P} \in \mathbb{R}^{K \times d}$
+
+\STATE \textbf{// Extract Minority Samples}
+\STATE $\mathcal{I}_{\text{minority}} \leftarrow \{i \mid y_{\text{train}}^{(i)} = 1\}$ \COMMENT{Attack samples}
+\STATE $X_{\text{minority}} \leftarrow X_{\text{train}}[\mathcal{I}_{\text{minority}}] \in \mathbb{R}^{N_{\text{min}} \times d}$ \COMMENT{$N_{\text{min}} = 119341$}
+
+\STATE \textbf{// K-Means Clustering}
+\IF{$N_{\text{min}} < K$}
+    \STATE $\mathcal{P} \leftarrow X_{\text{minority}}[1:K]$ \COMMENT{Use first $K$ samples if insufficient data}
+\ELSE
+    \STATE Initialize: $\text{KMeans}(n\_clusters=K, \text{random\_state}=42, n\_init=10)$
+    \STATE Fit clustering: $\text{KMeans}.\text{fit}(X_{\text{minority}})$
+    \STATE $\mathcal{P} \leftarrow \text{KMeans}.\text{cluster\_centers\_} \in \mathbb{R}^{K \times d}$
+\ENDIF
+
+\RETURN Prototype matrix $\mathcal{P}$
+\end{algorithmic}
+\end{algorithm}
+
+% =====================================================================
+% ALGORITHM 3: E-DAN v3 Training with FAIIA
+% =====================================================================
+
+\begin{algorithm}[htbp]
+\caption{E-DAN v3 Training with Early Stopping}
+\label{alg:training}
+\begin{algorithmic}[1]
+\REQUIRE Train loader $\mathcal{L}_{\text{train}}$, validation loader $\mathcal{L}_{\text{val}}$, model $\mathcal{M}$, loss function $\mathcal{L}_{\text{focal}}$, config $\mathcal{C}$
+\ENSURE Trained model $\mathcal{M}^*$
+
+\STATE \textbf{// Initialization}
+\STATE Optimizer $\leftarrow$ AdamW($\mathcal{M}.\text{parameters}(), \text{lr}=0.001, \text{weight\_decay}=10^{-4}$)
+\STATE Scheduler $\leftarrow$ CosineAnnealingWarmRestarts($T_0=15, T_{\text{mult}}=2, \eta_{\min}=10^{-6}$)
+\STATE $F1_{\text{best}} \leftarrow 0$, $\mathcal{M}_{\text{best}} \leftarrow \text{None}$, $\text{patience\_counter} \leftarrow 0$
+
+\STATE \textbf{// Training Loop}
+\FOR{epoch $= 1$ to $\mathcal{C}[\text{epochs}]$} \COMMENT{Max 150 epochs}
+    
+    \STATE \textbf{// Training Phase}
+    \STATE $\mathcal{M}.\text{train}()$
+    \STATE $\mathcal{L}_{\text{train\_epoch}} \leftarrow 0$
+    \FOR{$(X_{\text{batch}}, y_{\text{batch}}) \in \mathcal{L}_{\text{train}}$}
+        \STATE Apply label smoothing: $y_{\text{smooth}} \leftarrow y_{\text{batch}}(1 - \epsilon) + 0.5\epsilon$ \COMMENT{$\epsilon = 0.05$}
+        \STATE Forward pass: $\hat{y} \leftarrow \mathcal{M}(X_{\text{batch}})$ \COMMENT{Returns logits}
+        \STATE Compute loss: $\ell \leftarrow \mathcal{L}_{\text{focal}}(\hat{y}, y_{\text{smooth}})$
+        \STATE Backward pass: $\ell.\text{backward}()$
+        \STATE Gradient clipping: $\text{clip\_grad\_norm\_}(\mathcal{M}.\text{parameters}(), \text{max\_norm}=1.0)$
+        \STATE Update weights: Optimizer$.\text{step}()$, Optimizer$.\text{zero\_grad}()$
+        \STATE $\mathcal{L}_{\text{train\_epoch}} \leftarrow \mathcal{L}_{\text{train\_epoch}} + \ell$
+    \ENDFOR
+    \STATE Scheduler$.\text{step}()$ \COMMENT{Update learning rate}
+    
+    \STATE \textbf{// Validation Phase}
+    \STATE $\mathcal{M}.\text{eval}()$
+    \STATE $\mathcal{L}_{\text{val\_epoch}} \leftarrow 0$, $\hat{y}_{\text{val}} \leftarrow []$, $y_{\text{val}} \leftarrow []$
+    \FOR{$(X_{\text{batch}}, y_{\text{batch}}) \in \mathcal{L}_{\text{val}}$}
+        \STATE Forward (no grad): $\hat{y}_{\text{batch}} \leftarrow \mathcal{M}(X_{\text{batch}})$
+        \STATE $\mathcal{L}_{\text{val\_epoch}} \leftarrow \mathcal{L}_{\text{val\_epoch}} + \mathcal{L}_{\text{focal}}(\hat{y}_{\text{batch}}, y_{\text{batch}})$
+        \STATE Collect predictions: $\hat{y}_{\text{val}}.\text{append}(\sigma(\hat{y}_{\text{batch}}) > 0.5)$ \COMMENT{Sigmoid + threshold}
+        \STATE Collect labels: $y_{\text{val}}.\text{append}(y_{\text{batch}})$
+    \ENDFOR
+    \STATE Compute validation F1: $F1_{\text{val}} \leftarrow \text{f1\_score}(y_{\text{val}}, \hat{y}_{\text{val}})$
+    
+    \STATE \textbf{// Early Stopping Check}
+    \IF{$F1_{\text{val}} > F1_{\text{best}}$}
+        \STATE $F1_{\text{best}} \leftarrow F1_{\text{val}}$
+        \STATE $\mathcal{M}_{\text{best}} \leftarrow \text{deepcopy}(\mathcal{M}.\text{state\_dict}())$
+        \STATE $\text{patience\_counter} \leftarrow 0$
+    \ELSE
+        \STATE $\text{patience\_counter} \leftarrow \text{patience\_counter} + 1$
+    \ENDIF
+    
+    \IF{$\text{patience\_counter} \geq \mathcal{C}[\text{patience}]$} \COMMENT{Patience = 20}
+        \STATE \textbf{break} \COMMENT{Early stopping triggered}
+    \ENDIF
+\ENDFOR
+
+\STATE \textbf{// Restore Best Model}
+\STATE $\mathcal{M}.\text{load\_state\_dict}(\mathcal{M}_{\text{best}})$
+
+\RETURN Trained model $\mathcal{M}^*$ with best validation F1
+\end{algorithmic}
+\end{algorithm}
+
+% =====================================================================
+% ALGORITHM 4: FAIIA Forward Pass (Optional - Shows Internal Mechanism)
+% =====================================================================
+
+\begin{algorithm}[htbp]
+\caption{FAIIA Forward Pass (Single Head)}
+\label{alg:faiia_forward}
+\begin{algorithmic}[1]
+\REQUIRE Input features $x \in \mathbb{R}^{d}$, initial probability $p_{\text{init}} \in [0,1]$, prototypes $\mathcal{P} \in \mathbb{R}^{K \times d_a}$
+\ENSURE Attention output $o \in \mathbb{R}^{d_a}$, attention weights $a \in \mathbb{R}^{K}$
+
+\STATE \textbf{// Query Projection}
+\STATE $q \leftarrow W_q x \in \mathbb{R}^{d_a}$ \COMMENT{$W_q \in \mathbb{R}^{d_a \times d}$, $d_a = 32$}
+
+\STATE \textbf{// Prototype Cross-Attention Scores}
+\STATE $s \leftarrow q K_{\text{proto}}^\top + w_{\text{proto}} \in \mathbb{R}^{K}$ \COMMENT{$K_{\text{proto}} = \mathcal{P}$, $w_{\text{proto}}$ learnable}
+
+\STATE \textbf{// Uncertainty-Based Focal Modulation}
+\STATE $u \leftarrow 1 - 2|p_{\text{init}} - 0.5|$ \COMMENT{Uncertainty: max at $p_{\text{init}} = 0.5$}
+\STATE $w_{\text{focal}} \leftarrow \alpha (u + \epsilon)^\gamma \cdot \tau$ \COMMENT{$\alpha=0.60$, $\gamma=2.0$, $\epsilon=10^{-8}$, $\tau$ learnable}
+\STATE $s_{\text{mod}} \leftarrow s \cdot (1 + w_{\text{focal}})$ \COMMENT{Amplify scores for uncertain predictions}
+
+\STATE \textbf{// Attention Weights}
+\STATE $a \leftarrow \text{softmax}(s_{\text{mod}} / \sqrt{d_a})$ \COMMENT{Scaled softmax}
+\STATE $a \leftarrow \text{Dropout}(a, p=0.1)$
+
+\STATE \textbf{// Weighted Prototype Aggregation}
+\STATE $h \leftarrow a V_{\text{proto}} \in \mathbb{R}^{d_a}$ \COMMENT{$V_{\text{proto}} = \mathcal{P}$}
+
+\STATE \textbf{// Output Projection}
+\STATE $o \leftarrow \text{LayerNorm}(W_o h) \in \mathbb{R}^{d_a}$ \COMMENT{$W_o \in \mathbb{R}^{d_a \times d_a}$}
+
+\RETURN Attention output $o$, attention weights $a$
+\end{algorithmic}
+\end{algorithm}
