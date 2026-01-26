@@ -93,3 +93,4 @@ After the attention mechanism highlights suspicious regions, the data is process
 - **Technical Role:** The training objective.
     
 - **Architectural Justification:** Standard Cross-Entropy Loss is dominated by easy negatives (normal traffic). Focal Loss down-weights these easy examples (where $p_t$ is high) and focuses training on sparse, hard examples (attacks), complementing the Focal-Aware design of the architecture itself.
+- 

@@ -85,19 +85,19 @@ LightGBM  0.896893   0.885831  0.932983  0.908796  0.977633       0.983866
 
 
 
-=== Per-attack metrics (Minority < 5000 vs Majority >= 5000) ===
-| ID | Attack | Samples | Detection Rate | Type |
-| :--- | :--- | :--- | :--- | :--- |
-| 0 | Normal | 37000 | 0.778622 | Majority |
-| 9 | Generic | 18871 | 0.998569 | Majority |
-| 4 | Exploits | 11132 | 0.974308 | Majority |
-| 6 | Fuzzers | 6062 | 0.706038 | Majority |
-| 3 | DoS | 4089 | 0.979213 | Minority |
-| 1 | Reconnaissance | 3496 | 0.981407 | Minority |
-| 5 | Analysis | 677 | 0.998523 | Minority |
-| 2 | Backdoor | 583 | 0.993139 | Minority |
-| 8 | Shellcode | 378 | 0.920635 | Minority |
-| 7 | Worms | 44 | 0.954545 | Minority |
+=== Table: Per-Attack Detection Rates (Recall) with Gain ===
+
+| Attack Category | FAIIA (Full) | Vanilla DNN | XGBoost | LightGBM | Gain ($\Delta$) % |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| Reconnaissance | 0.981407 | 0.888158 | 0.994565 | 0.992277 | -1.10% |
+| Backdoor | 0.993139 | 0.965695 | 0.996569 | 0.994854 | -0.17% |
+| DoS | 0.979213 | 0.943262 | 0.987038 | 0.986060 | -0.69% |
+| Exploits | 0.974308 | 0.937657 | 0.971524 | 0.974308 | +0.00% |
+| Analysis | 0.998523 | 0.989660 | 0.918759 | 0.918759 | +8.68% |
+| Fuzzers | 0.706038 | 0.359617 | 0.574563 | 0.581986 | +21.32% |
+| Worms | 0.954545 | 0.795455 | 0.954545 | 0.954545 | +0.00% |
+| Shellcode | 0.920635 | 0.687831 | 0.888889 | 0.888889 | +3.57% |
+| Generic | 0.998569 | 0.991150 | 0.998463 | 0.998304 | +0.03% |
 
 
 
