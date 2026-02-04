@@ -116,6 +116,9 @@ class DyGATFRTrainer:
         n_minority = len(minority_idx)
         n_majority = len(majority_idx)
         
+        # Get device from labels
+        device = labels.device
+        
         if epoch < self.curriculum_epochs:
             # Early epochs: Nearly balanced sampling
             # Gradually increase imbalance ratio
@@ -126,15 +129,15 @@ class DyGATFRTrainer:
             )
             
             sampled_majority = majority_idx[
-                torch.randperm(n_majority)[:n_sample_majority]
+                torch.randperm(n_majority, device=device)[:n_sample_majority]
             ]
             selected_idx = torch.cat([minority_idx, sampled_majority])
         else:
             # Later epochs: Use all data
-            selected_idx = torch.arange(len(labels))
+            selected_idx = torch.arange(len(labels), device=device)
         
         # Shuffle
-        return selected_idx[torch.randperm(len(selected_idx))]
+        return selected_idx[torch.randperm(len(selected_idx), device=device)]
     
     def compute_feedback_signals(
         self,
@@ -196,11 +199,16 @@ class DyGATFRTrainer:
         
         # Curriculum sampling
         if train_mask is not None:
-            available_idx = torch.where(train_mask)[0]
+            # Move train_mask to same device as y
+            train_mask_device = train_mask.to(self.device) if train_mask.device != self.device else train_mask
+            available_idx = torch.where(train_mask_device)[0]
             labels_available = y[available_idx]
             selected_relative = self.curriculum_sample(
                 labels_available, epoch, max_epochs
             )
+            # Ensure selected_relative is on same device
+            if selected_relative.device != available_idx.device:
+                selected_relative = selected_relative.to(available_idx.device)
             train_idx = available_idx[selected_relative]
         else:
             train_idx = self.curriculum_sample(y, epoch, max_epochs)
