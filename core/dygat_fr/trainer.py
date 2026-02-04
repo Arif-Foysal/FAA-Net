@@ -242,9 +242,11 @@ class DyGATFRTrainer:
             )
             
             if replay_x is not None and len(replay_x) > 0:
-                # Process replay samples through classifier only
+                # Process replay samples through input projection + classifier
                 # (simplified - full version would use graph context)
-                replay_embed = self.model.prototype_attention.query_proj(replay_x)
+                replay_proj = self.model.input_proj(replay_x)  # project raw features to hidden dim
+                replay_proj = self.model.input_norm(replay_proj)
+                replay_embed = self.model.residual_proj(replay_proj)  # project to out_channels
                 replay_logits = self.model.classifier(replay_embed)
                 
                 replay_loss = self.loss_fn.focal_loss(replay_logits, replay_y)
