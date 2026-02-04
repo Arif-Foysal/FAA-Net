@@ -1,10 +1,23 @@
 
+# Core dependencies
 pandas
 numpy
 scikit-learn
 torch
 joblib
+
+# Visualization
 matplotlib
 seaborn
+
+# Baseline models
 xgboost
 lightgbm
+
+# Graph Neural Networks (for DyGAT-FR)
+torch-geometric
+torch-scatter
+torch-sparse
+
+# Optional: for faster graph operations
+# networkx
