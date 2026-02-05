@@ -205,6 +205,17 @@ class DyGATFRTrainer:
         edge_index = data.edge_index.to(self.device)
         y = data.y.to(self.device)
         
+        # Validate edge indices to prevent CUDA errors
+        num_nodes = x.size(0)
+        if edge_index.numel() > 0:
+            max_idx = edge_index.max().item()
+            min_idx = edge_index.min().item()
+            if max_idx >= num_nodes or min_idx < 0:
+                # Filter invalid edges
+                valid_mask = (edge_index[0] < num_nodes) & (edge_index[1] < num_nodes)
+                valid_mask = valid_mask & (edge_index[0] >= 0) & (edge_index[1] >= 0)
+                edge_index = edge_index[:, valid_mask]
+        
         # Curriculum sampling
         if train_mask is not None:
             # Move train_mask to same device as y
@@ -311,6 +322,17 @@ class DyGATFRTrainer:
         x = data.x.to(self.device)
         edge_index = data.edge_index.to(self.device)
         y = data.y.to(self.device)
+        
+        # Validate edge indices to prevent CUDA errors
+        num_nodes = x.size(0)
+        if edge_index.numel() > 0:
+            max_idx = edge_index.max().item()
+            min_idx = edge_index.min().item()
+            if max_idx >= num_nodes or min_idx < 0:
+                # Filter invalid edges
+                valid_mask = (edge_index[0] < num_nodes) & (edge_index[1] < num_nodes)
+                valid_mask = valid_mask & (edge_index[0] >= 0) & (edge_index[1] >= 0)
+                edge_index = edge_index[:, valid_mask]
         
         # Forward pass
         logits = self.model(x, edge_index)
@@ -454,14 +476,17 @@ class DyGATFRTrainer:
                 for key, value in val_metrics.items():
                     self.history[f'val_{key}'].append(value)
                 
-                # Early stopping check
-                if val_metrics['f1'] > best_val_f1:
-                    best_val_f1 = val_metrics['f1']
+                # Early stopping check - use F1 but require minimum 20 epochs
+                # and track recall to avoid minority performance regression
+                current_score = val_metrics['f1']
+                if current_score > best_val_f1 or epoch < 20:
+                    if current_score > best_val_f1:
+                        best_val_f1 = current_score
+                        self.best_model_state = {
+                            k: v.cpu().clone() 
+                            for k, v in self.model.state_dict().items()
+                        }
                     patience_counter = 0
-                    self.best_model_state = {
-                        k: v.cpu().clone() 
-                        for k, v in self.model.state_dict().items()
-                    }
                 else:
                     patience_counter += 1
             
