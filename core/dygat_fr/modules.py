@@ -230,12 +230,15 @@ class DyGATConv(MessagePassing):
         alpha_src = (x_src * self.att_src).sum(dim=-1)  # (N, heads)
         alpha_dst = (x_dst * self.att_dst).sum(dim=-1)  # (N, heads)
         
-        # Message passing
+        # Message passing with focal modulation
+        # node_probs needs to be indexed by edge endpoints for focal mod
         out = self.propagate(
             edge_index,
             x=(x_src, x_dst),
             alpha=(alpha_src, alpha_dst),
             node_probs=node_probs,
+            node_probs_j=node_probs,  # Will be auto-indexed by PyG
+            node_probs_i=node_probs,  # Will be auto-indexed by PyG
             size=None
         )
         
@@ -268,18 +271,22 @@ class DyGATConv(MessagePassing):
         alpha_j: torch.Tensor,
         alpha_i: torch.Tensor,
         node_probs: Optional[torch.Tensor],
+        node_probs_j: Optional[torch.Tensor],
+        node_probs_i: Optional[torch.Tensor],
         index: torch.Tensor,
         ptr: Optional[torch.Tensor],
         size_i: Optional[int]
     ) -> torch.Tensor:
         """
-        Compute attention-weighted messages.
+        Compute attention-weighted messages with focal modulation.
         
         Args:
             x_j: Source node features (E, heads, out_channels)
             alpha_j: Source attention scores (E, heads)
             alpha_i: Target attention scores (E, heads)
-            node_probs: Node probability estimates (N,)
+            node_probs: Node probability estimates (N,) - unused, kept for compat
+            node_probs_j: Source node probabilities (E,)
+            node_probs_i: Target node probabilities (E,)
             index: Target node indices for aggregation
             ptr: CSR pointer (optional)
             size_i: Number of target nodes
@@ -293,6 +300,11 @@ class DyGATConv(MessagePassing):
         
         # Softmax normalization
         alpha = softmax(alpha, index, ptr, size_i)
+        
+        # CRITICAL FIX: Apply focal modulation to attention weights
+        # This is the core mechanism that amplifies attention on uncertain nodes
+        if node_probs_j is not None and node_probs_i is not None:
+            alpha = self.focal_mod(alpha, node_probs_j, node_probs_i)
         
         # Store attention weights for visualization
         self._alpha = alpha.detach()
@@ -501,7 +513,7 @@ class FeedbackRefinementModule(nn.Module):
     Refines node embeddings based on prediction errors.
     
     Implements a differentiable feedback loop:
-        h^{t+1} = gate * h^{t} + (1-gate) * MLP(error) * β
+        h^{t+1} = gate * h^{t} + (1-gate) * MLP(concat(h, error, loss)) * β
     
     This enables:
     1. Semi-supervised refinement from sparse human labels
@@ -521,10 +533,13 @@ class FeedbackRefinementModule(nn.Module):
     ):
         super().__init__()
         
-        # Error encoding network
+        self.embed_dim = embed_dim
+        
+        # Error encoding network - takes embedding + error + loss
+        # Input: (embed_dim + 2) -> error signal (1) + loss value (1)
         self.error_encoder = nn.Sequential(
-            nn.Linear(embed_dim + 1, hidden_dim),  # +1 for scalar loss
-            nn.ReLU(),
+            nn.Linear(embed_dim + 2, hidden_dim),
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, embed_dim)
         )
@@ -535,11 +550,8 @@ class FeedbackRefinementModule(nn.Module):
             nn.Sigmoid()
         )
         
-        # Learnable feedback strength (β)
+        # Learnable feedback strength (β) - starts small for stability
         self.feedback_strength = nn.Parameter(torch.tensor([0.1]))
-        
-        # Gradient clipping for stability
-        self.register_buffer('grad_clip', torch.tensor([1.0]))
     
     def forward(
         self,
@@ -552,30 +564,40 @@ class FeedbackRefinementModule(nn.Module):
         
         Args:
             current_embeddings: Current node embeddings (N, embed_dim)
-            prediction_errors: Per-node prediction errors (N,) or (N, embed_dim)
+            prediction_errors: Per-node prediction errors (N,) - binary 0/1
             loss_values: Per-node loss values (N,)
         
         Returns:
             refined_embeddings: Feedback-refined embeddings (N, embed_dim)
         """
-        # Ensure prediction_errors has correct shape
+        # Ensure scalars are properly shaped
         if prediction_errors.dim() == 1:
-            prediction_errors = prediction_errors.unsqueeze(-1).expand_as(
-                current_embeddings
-            )
+            prediction_errors = prediction_errors.unsqueeze(-1)  # (N, 1)
+        if loss_values.dim() == 1:
+            loss_values = loss_values.unsqueeze(-1)  # (N, 1)
         
-        # Concatenate error signals
+        # Concatenate: embedding + error signal + loss value
+        # This gives the encoder full context about the error
         error_input = torch.cat([
-            prediction_errors,
-            loss_values.unsqueeze(-1)
-        ], dim=-1)
+            current_embeddings,  # (N, embed_dim)
+            prediction_errors,   # (N, 1) - was this node misclassified?
+            loss_values          # (N, 1) - how wrong was the prediction?
+        ], dim=-1)  # (N, embed_dim + 2)
         
-        # Encode error signal
+        # Encode error signal into refinement direction
         error_encoding = self.error_encoder(error_input)
         
-        # Compute gate values
+        # Compute gate values - determines how much to trust refinement
         gate_input = torch.cat([current_embeddings, error_encoding], dim=-1)
         gate_values = self.gate(gate_input)
+        
+        # Gated update: mostly keep current, add small refinement
+        # gate_values close to 1 -> keep current embeddings
+        # gate_values close to 0 -> use more refinement
+        refined = (
+            gate_values * current_embeddings +
+            (1 - gate_values) * error_encoding * self.feedback_strength.abs()
+        )
         
         # Gated update with feedback strength
         refined = (

@@ -232,9 +232,21 @@ class DyGATFRTrainer:
         else:
             train_idx = self.curriculum_sample(y, epoch, max_epochs)
         
-        # Forward pass
+        # ============================================================
+        # Forward pass with optional feedback refinement
+        # ============================================================
+        feedback_errors = None
+        feedback_losses = None
+        
+        # After warmup, use feedback from previous iteration's errors
+        if epoch >= self.feedback_start_epoch and hasattr(self, '_prev_errors'):
+            feedback_errors = self._prev_errors
+            feedback_losses = self._prev_losses
+        
         logits, embeddings = self.model(
             x, edge_index,
+            feedback_errors=feedback_errors,
+            feedback_losses=feedback_losses,
             return_embeddings=True
         )
         
@@ -242,6 +254,16 @@ class DyGATFRTrainer:
         train_logits = logits[train_idx]
         train_labels = y[train_idx]
         train_embeddings = embeddings[train_idx]
+        
+        # Compute feedback signals for next iteration
+        if epoch >= self.feedback_start_epoch - 1:
+            with torch.no_grad():
+                probs_fb = torch.sigmoid(logits.squeeze(-1))
+                preds_fb = (probs_fb > 0.5).float()
+                self._prev_errors = (preds_fb != y.float()).float()
+                self._prev_losses = F.binary_cross_entropy(
+                    probs_fb, y.float(), reduction='none'
+                )
         
         # Get prototypes for contrastive loss
         prototypes = self.model.get_prototype_keys()
