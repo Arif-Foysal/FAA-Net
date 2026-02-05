@@ -491,17 +491,24 @@ class DyGATFRLoss(nn.Module):
         # Compute similarity
         sim = torch.matmul(embeddings, prototypes.T)  # (N, K)
         
+        # Determine minority class (the one with fewer samples)
+        unique, counts = torch.unique(labels, return_counts=True)
+        if len(unique) < 2:
+            return torch.tensor(0.0, device=embeddings.device)
+        actual_minority_label = unique[counts.argmin()].item()
+        
         # Filter to minority samples
-        minority_mask = labels == minority_label
+        minority_mask = labels == actual_minority_label
         if minority_mask.sum() == 0:
             return torch.tensor(0.0, device=embeddings.device)
         
         minority_sim = sim[minority_mask]
         
-        # Maximize similarity to nearest prototype (negative for minimization)
+        # Minimize (1 - similarity) to pull minority toward prototypes
+        # Using 1 - sim ensures loss is positive and decreases as similarity increases
         max_sim = minority_sim.max(dim=-1)[0]
         
-        return -max_sim.mean()
+        return (1.0 - max_sim).mean()
     
     def forward(
         self,

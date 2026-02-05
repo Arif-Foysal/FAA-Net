@@ -93,7 +93,7 @@ class DyGATFRTrainer:
         labels: torch.Tensor,
         epoch: int,
         max_epochs: int,
-        minority_label: int = 1
+        minority_label: Optional[int] = None
     ) -> torch.Tensor:
         """
         Curriculum learning: Start with balanced, ramp up imbalance.
@@ -102,11 +102,19 @@ class DyGATFRTrainer:
             labels: Node labels (N,)
             epoch: Current epoch
             max_epochs: Total epochs
-            minority_label: Label for minority class
+            minority_label: Label for minority class (auto-detected if None)
         
         Returns:
             Selected indices for training
         """
+        # Auto-detect minority class if not specified
+        if minority_label is None:
+            unique, counts = torch.unique(labels, return_counts=True)
+            if len(unique) >= 2:
+                minority_label = unique[counts.argmin()].item()
+            else:
+                minority_label = 1  # fallback
+        
         minority_mask = labels == minority_label
         majority_mask = ~minority_mask
         
@@ -385,7 +393,14 @@ class DyGATFRTrainer:
         y = data.y.to(self.device)
         
         # Initialize/update prototypes with minority samples
-        minority_mask = y == 1
+        # Auto-detect minority class (fewer samples)
+        unique, counts = torch.unique(y, return_counts=True)
+        if len(unique) >= 2:
+            minority_label = unique[counts.argmin()].item()
+        else:
+            minority_label = 1  # fallback
+        
+        minority_mask = y == minority_label
         if minority_mask.sum() > 0:
             self.model.eval()
             with torch.no_grad():
