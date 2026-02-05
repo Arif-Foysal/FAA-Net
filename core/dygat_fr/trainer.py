@@ -10,6 +10,7 @@ Training pipeline for DyGAT-FR with:
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from typing import Dict, List, Optional, Tuple, Any
