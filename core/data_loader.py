@@ -29,7 +29,7 @@ def get_data_paths(data_dir="/content"):
 
     return str(train_file), str(test_file)
 
-def load_and_preprocess_data(data_dir="/content", cache_file="faiia_preprocessed_data.pkl"):
+def load_and_preprocess_data(data_dir="/content", cache_file="edanet_preprocessed_data.pkl"):
     """
     Loads, cleans, encodes, selects features, and scales the data.
     Returns X_train_scaled, X_test_scaled, y_train, y_test, y_train_cat, y_test_cat

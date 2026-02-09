@@ -33,7 +33,7 @@ def evaluate_sklearn_model(model, X_test, y_test, threshold=0.5):
 
 def main():
     print("="*60)
-    print("FAIIA-IDS: Training Baselines (XGBoost & LightGBM)")
+    print("EDA-Net: Training Baselines (XGBoost & LightGBM)")
     print("="*60)
 
     # 1. Threading optimization for CPU
@@ -70,7 +70,7 @@ def main():
     
     save_dir = "."
     if os.path.exists("/content/drive/MyDrive"):
-        save_dir = "/content/drive/MyDrive/FAIIA_Models"
+        save_dir = "/content/drive/MyDrive/EDANet_Models"
         os.makedirs(save_dir, exist_ok=True)
 
     joblib.dump(xgb_model, os.path.join(save_dir, 'xgboost_baseline.joblib'))

@@ -1,3 +1,9 @@
+"""
+EDA-Net: Main Model Training Script.
+
+Trains the full EDA-Net (Entropy-Dynamic Attention Network) on UNSW-NB15
+and saves all artifacts needed for paper figures and evaluation.
+"""
 
 import sys
 import os
@@ -6,17 +12,20 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import torch
 import torch.nn as nn
-from core.config import V3_CONFIG, RANDOM_STATE
+from core.config import EDA_CONFIG, RANDOM_STATE
 from core.data_loader import load_and_preprocess_data, create_dataloaders
-from core.model import EDANv3, MinorityPrototypeGenerator
-from core.loss import ImbalanceAwareFocalLoss_Logits
+from core.model import EDANet, MinorityPrototypeGenerator
+from core.loss import EDANetLoss
 from core.trainer import train_model
-from core.utils import set_all_seeds, evaluate_model, print_metrics, save_training_history, save_predictions
+from core.utils import (set_all_seeds, evaluate_model, print_metrics,
+                        save_training_history, save_predictions,
+                        collect_edt_analysis, save_edt_analysis)
+
 
 def main():
-    print("="*60)
-    print("FAIIA-IDS: Main Model Training (EDAN v3)")
-    print("="*60)
+    print("=" * 60)
+    print("EDA-Net: Entropy-Dynamic Attention Network — Training")
+    print("=" * 60)
 
     # 1. Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -24,97 +33,108 @@ def main():
     set_all_seeds(RANDOM_STATE)
 
     # 2. Data Loading
-    # Check if we are in colab or local
-    data_dir = "/content"
-    if not os.path.exists(data_dir):
-        data_dir = "." # Fallback to current dir if not in Colab
-        
+    data_dir = "/content" if os.path.exists("/content") else "."
     X_train_scaled, X_test_scaled, y_train, y_test, _, _ = load_and_preprocess_data(data_dir=data_dir)
-    
+
     # 3. Create DataLoaders
     train_loader, val_loader, test_loader, X_test_tensor = create_dataloaders(
-        X_train_scaled, y_train, X_test_scaled, y_test, 
-        batch_size=V3_CONFIG['batch_size']
+        X_train_scaled, y_train, X_test_scaled, y_test,
+        batch_size=EDA_CONFIG['batch_size']
     )
 
     # 4. Extract Minority Prototypes
     print("\nExtracting Minority Prototypes...")
-    # Re-construct X_train from scaler to extract minority? 
-    # load_and_preprocess_data returns scaled data.
-    # We need to filter X_train_scaled by y_train
     minority_mask = y_train.values == 1
     X_minority = X_train_scaled[minority_mask]
     X_majority = X_train_scaled[~minority_mask]
-    
+
     print(f"  Minority samples: {len(X_minority)}")
     print(f"  Majority samples: {len(X_majority)}")
-    
-    proto_gen = MinorityPrototypeGenerator(n_prototypes=V3_CONFIG['n_prototypes'], random_state=RANDOM_STATE)
-    minority_prototypes = proto_gen.fit(X_minority)
-    
-    # 5. Initialize Model
-    input_dim = X_train_scaled.shape[1]
-    model = EDANv3(
-        input_dim=input_dim,
-        num_heads=V3_CONFIG['num_heads'],
-        attention_dim=V3_CONFIG['attention_dim'],
-        n_prototypes=V3_CONFIG['n_prototypes'],
-        hidden_units=V3_CONFIG['hidden_units'],
-        dropout_rate=V3_CONFIG['dropout_rate'],
-        attention_dropout=V3_CONFIG['attention_dropout'],
-        focal_alpha=V3_CONFIG['focal_alpha'],
-        focal_gamma=V3_CONFIG['focal_gamma'],
-        num_classes=1,
-        output_logits=True # Use Logits for stability (consistent with Ablation)
-    ).to(device)
-    
-    # Initialize prototypes
-    model.faiia.initialize_all_prototypes(minority_prototypes, device)
-    
-    print(f"\nModel initialized with {model.count_parameters():,} parameters.")
 
-    # 6. Loss Function
-    # Use ImbalanceAwareFocalLoss_Logits for numerical stability (consistent with Ablation)
+    proto_gen = MinorityPrototypeGenerator(
+        n_prototypes=EDA_CONFIG['n_prototypes'], random_state=RANDOM_STATE
+    )
+    minority_prototypes = proto_gen.fit(X_minority)
+
+    # 5. Initialise Model
+    input_dim = X_train_scaled.shape[1]
+    model = EDANet(
+        input_dim=input_dim,
+        num_heads=EDA_CONFIG['num_heads'],
+        attention_dim=EDA_CONFIG['attention_dim'],
+        n_prototypes=EDA_CONFIG['n_prototypes'],
+        hidden_units=EDA_CONFIG['hidden_units'],
+        dropout_rate=EDA_CONFIG['dropout_rate'],
+        attention_dropout=EDA_CONFIG['attention_dropout'],
+        tau_min=EDA_CONFIG['tau_min'],
+        tau_max=EDA_CONFIG['tau_max'],
+        tau_hidden_dim=EDA_CONFIG['tau_hidden_dim'],
+        edt_mode=EDA_CONFIG['edt_mode'],
+        normalize_entropy=EDA_CONFIG['normalize_entropy'],
+        num_classes=1,
+        output_logits=True
+    ).to(device)
+
+    # Initialise prototypes from minority cluster centres
+    model.edt_attention.initialize_all_prototypes(minority_prototypes, device)
+
+    print(f"\nModel initialised with {model.count_parameters():,} parameters.")
+    print(f"  EDT mode: {EDA_CONFIG['edt_mode']}")
+    print(f"  τ range: [{EDA_CONFIG['tau_min']}, {EDA_CONFIG['tau_max']}]")
+
+    # 6. Loss Function (Focal + Entropy Regularisation)
     class_counts = [len(X_majority), len(X_minority)]
-    criterion = ImbalanceAwareFocalLoss_Logits(
-        gamma=V3_CONFIG['focal_gamma'],
-        class_counts=class_counts # Use calculated weights
+    criterion = EDANetLoss(
+        gamma=EDA_CONFIG['focal_gamma'],
+        class_counts=class_counts,
+        entropy_reg_weight=EDA_CONFIG['entropy_reg_weight']
     )
 
     # 7. Train
     model, history = train_model(
-        model, train_loader, val_loader, V3_CONFIG, criterion, device
+        model, train_loader, val_loader, EDA_CONFIG, criterion, device,
+        use_edt_loss=True
     )
 
     # 8. Evaluate
     print("\nEvaluating on Test Set...")
     metrics, y_probs, y_pred = evaluate_model(model, X_test_tensor, y_test, device)
-    print_metrics(metrics, "EDANv3 Test Results")
-    
-    # Save artifacts
+    print_metrics(metrics, "EDA-Net Test Results")
+
+    # 9. Collect EDT analysis (entropy, tau per sample)
+    print("\nCollecting EDT analysis data...")
+    analysis_df = collect_edt_analysis(model, X_test_tensor, y_test, device)
+
+    # 10. Save artifacts
     save_dir = "."
     if os.path.exists("/content/drive/MyDrive"):
-        save_dir = "/content/drive/MyDrive/FAIIA_Models"
+        save_dir = "/content/drive/MyDrive/EDANet_Models"
         os.makedirs(save_dir, exist_ok=True)
         print(f"\nSaving artifacts to Google Drive: {save_dir}")
-        
-    # Save Metrics CSV
-    pd.DataFrame([metrics]).to_csv(os.path.join(save_dir, 'edan_v3_metrics.csv'), index=False)
-    
-    # Save Model
-    save_path = os.path.join(save_dir, 'edan_v3_main.pt')
+
+    # Metrics CSV
+    pd.DataFrame([metrics]).to_csv(os.path.join(save_dir, 'edanet_metrics.csv'), index=False)
+
+    # Model checkpoint
+    save_path = os.path.join(save_dir, 'edanet_main.pt')
     torch.save(model.state_dict(), save_path)
     print(f"Model saved to {save_path}")
 
-    # Save History (for convergence plots F3-F5)
-    hist_path = os.path.join(save_dir, 'edan_v3_history.csv')
+    # Training history (includes tau/entropy curves)
+    hist_path = os.path.join(save_dir, 'edanet_history.csv')
     save_training_history(history, hist_path)
     print(f"Training history saved to {hist_path}")
 
-    # Save Predictions (for ROC/PR F7-F8 and Per-Attack Analysis)
-    pred_path = os.path.join(save_dir, 'edan_v3_predictions.npz')
+    # Predictions (for ROC/PR curves)
+    pred_path = os.path.join(save_dir, 'edanet_predictions.npz')
     save_predictions(y_test, y_probs, pred_path)
     print(f"Predictions saved to {pred_path}")
+
+    # EDT analysis (for temperature/entropy figures)
+    analysis_path = os.path.join(save_dir, 'edanet_edt_analysis.csv')
+    save_edt_analysis(analysis_df, analysis_path)
+    print(f"EDT analysis saved to {analysis_path}")
+
 
 if __name__ == "__main__":
     main()

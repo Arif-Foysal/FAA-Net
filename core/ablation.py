@@ -1,12 +1,24 @@
+"""
+Ablation model variants for EDA-Net.
+
+Provides:
+    - VanillaDNN_Ablation:     No attention baseline
+    - FixedTempNet_Ablation:   Standard fixed-temperature attention (no EDT)
+    - HeuristicEDTNet_Ablation: Heuristic τ mapping (no learned MLP)
+    - EDANet_Ablation:         Full EDA-Net with output_logits=True
+"""
 
 import torch
 import torch.nn as nn
-from core.model import EDANv3
+from core.model import EDANet
+
 
 class VanillaDNN_Ablation(nn.Module):
-    """Standard DNN without attention mechanism, outputs raw logits."""
+    """Standard DNN without any attention mechanism. Outputs raw logits."""
+
     def __init__(self, input_dim, hidden_units=[256, 128, 64], dropout_rate=0.3):
         super(VanillaDNN_Ablation, self).__init__()
+        self.output_logits = True
 
         layers = []
         prev_dim = input_dim
@@ -23,9 +35,8 @@ class VanillaDNN_Ablation(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(prev_dim, 32),
             nn.ReLU(),
-            nn.Dropout(dropout_rate/2),
-            nn.Linear(32, 1), # No Sigmoid for raw logits
-            nn.Identity() # Output raw logits
+            nn.Dropout(dropout_rate / 2),
+            nn.Linear(32, 1),
         )
 
     def forward(self, x):
@@ -33,27 +44,39 @@ class VanillaDNN_Ablation(nn.Module):
         return self.classifier(x)
 
     def count_parameters(self):
-        """Returns the number of trainable parameters in the model."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-class EDANv3_Ablation(EDANv3):
+
+class FixedTempNet_Ablation(EDANet):
     """
-    EDAN v3 with FAIIA, modified to output raw logits for ablation studies.
-    Inherits from EDANv3 but sets output_logits=True by default.
+    EDA-Net architecture with FIXED temperature attention (no EDT).
+    Serves as the "attention without EDT" ablation baseline.
     """
-    def __init__(self, input_dim, num_heads=4, attention_dim=32, n_prototypes=8,
-                 hidden_units=[256, 128, 64], dropout_rate=0.3, attention_dropout=0.1,
-                 focal_alpha=0.60, focal_gamma=2.0, num_classes=1):
-        super(EDANv3_Ablation, self).__init__(
-            input_dim=input_dim,
-            num_heads=num_heads,
-            attention_dim=attention_dim,
-            n_prototypes=n_prototypes,
-            hidden_units=hidden_units,
-            dropout_rate=dropout_rate,
-            attention_dropout=attention_dropout,
-            focal_alpha=focal_alpha,
-            focal_gamma=focal_gamma,
-            num_classes=num_classes,
-            output_logits=True 
-        )
+
+    def __init__(self, input_dim, **kwargs):
+        kwargs.setdefault('edt_mode', 'fixed')
+        kwargs.setdefault('output_logits', True)
+        super().__init__(input_dim=input_dim, **kwargs)
+
+
+class HeuristicEDTNet_Ablation(EDANet):
+    """
+    EDA-Net with HEURISTIC temperature mapping (τ = τ_max·(1−H̃) + τ_min).
+    No learned MLP — tests whether the learned mapping adds value.
+    """
+
+    def __init__(self, input_dim, **kwargs):
+        kwargs.setdefault('edt_mode', 'heuristic')
+        kwargs.setdefault('output_logits', True)
+        super().__init__(input_dim=input_dim, **kwargs)
+
+
+class EDANet_Ablation(EDANet):
+    """
+    Full EDA-Net with learned EDT, configured for ablation (output_logits=True).
+    """
+
+    def __init__(self, input_dim, **kwargs):
+        kwargs.setdefault('edt_mode', 'learned')
+        kwargs.setdefault('output_logits', True)
+        super().__init__(input_dim=input_dim, **kwargs)
