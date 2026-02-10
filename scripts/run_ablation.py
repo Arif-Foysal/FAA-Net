@@ -6,7 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import torch
 import torch.nn as nn
 import pandas as pd
-from core.config import V3_CONFIG, RANDOM_STATE
+from core.config import V3_CONFIG, V3_EWKM_CONFIG, RANDOM_STATE
 from core.data_loader import load_and_preprocess_data, create_dataloaders
 from core.ablation import VanillaDNN_Ablation, EDANv3_Ablation
 from core.model import MinorityPrototypeGenerator
@@ -86,7 +86,7 @@ def main():
     pd.DataFrame(history_vanilla).to_csv(save_training_history_path, index=False)
     print(f"Saved Vanilla DNN history to {save_training_history_path}")
 
-    # --- Setup for EDAN Ablation (Prototypes) ---
+    # --- Setup for EDAN Ablation (Prototypes — Standard KMeans) ---
     minority_mask = y_train.values == 1
     X_minority = X_train_scaled[minority_mask]
     proto_gen = MinorityPrototypeGenerator(n_prototypes=V3_CONFIG['n_prototypes'], random_state=RANDOM_STATE)
@@ -112,11 +112,43 @@ def main():
         "FAIIA_Focal", model_4, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_4, device
     )
 
+    # --- Setup for EWKM Ablation (Entropy-Weighted KMeans Prototypes) ---
+    print("\n--- Generating EWKM Prototypes ---")
+    ewkm_cfg = V3_EWKM_CONFIG
+    proto_gen_ewkm = MinorityPrototypeGenerator(
+        n_prototypes=ewkm_cfg['n_prototypes'], random_state=RANDOM_STATE,
+        use_ewkm=True, ewkm_gamma=ewkm_cfg['ewkm_gamma']
+    )
+    prototypes_ewkm = proto_gen_ewkm.fit(X_minority)
+    ewkm_fw = proto_gen_ewkm.feature_weights
+    print(f"  EWKM prototypes generated (gamma={ewkm_cfg['ewkm_gamma']})")
+
+    # --- Experiment 5: FAIIA + EWKM + BCE ---
+    model_5 = EDANv3_Ablation(
+        input_dim=input_dim, num_heads=ewkm_cfg['num_heads'], attention_dim=ewkm_cfg['attention_dim']
+    ).to(device)
+    model_5.faiia.initialize_all_prototypes(prototypes_ewkm, device, ewkm_feature_weights=ewkm_fw)
+    criterion_5 = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    results['FAIIA + EWKM + BCE'], _ = run_experiment(
+        "FAIIA_EWKM_BCE", model_5, train_loader, val_loader, X_test_tensor, y_test, ewkm_cfg, criterion_5, device
+    )
+
+    # --- Experiment 6: FAIIA + EWKM + Focal Loss ---
+    model_6 = EDANv3_Ablation(
+        input_dim=input_dim, num_heads=ewkm_cfg['num_heads'], attention_dim=ewkm_cfg['attention_dim']
+    ).to(device)
+    model_6.faiia.initialize_all_prototypes(prototypes_ewkm, device, ewkm_feature_weights=ewkm_fw)
+    criterion_6 = ImbalanceAwareFocalLoss_Logits(class_counts=class_counts, gamma=2.0)
+    results['FAIIA + EWKM + Focal'], _ = run_experiment(
+        "FAIIA_EWKM_Focal", model_6, train_loader, val_loader, X_test_tensor, y_test, ewkm_cfg, criterion_6, device
+    )
+
     # Summary
     print("\n=== Ablation Study Summary ===")
     df = pd.DataFrame(results).T
     print(df)
     df.to_csv('ablation_summary.csv')
+    print(f"\nResults saved to ablation_summary.csv ({len(results)} experiments)")
 
 if __name__ == "__main__":
     main()

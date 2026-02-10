@@ -49,8 +49,15 @@ def main():
     print(f"  Minority samples: {len(X_minority)}")
     print(f"  Majority samples: {len(X_majority)}")
     
-    proto_gen = MinorityPrototypeGenerator(n_prototypes=V3_CONFIG['n_prototypes'], random_state=RANDOM_STATE)
+    use_ewkm = V3_CONFIG.get('use_ewkm', False)
+    ewkm_gamma = V3_CONFIG.get('ewkm_gamma', 1.0)
+    proto_gen = MinorityPrototypeGenerator(
+        n_prototypes=V3_CONFIG['n_prototypes'], random_state=RANDOM_STATE,
+        use_ewkm=use_ewkm, ewkm_gamma=ewkm_gamma
+    )
     minority_prototypes = proto_gen.fit(X_minority)
+    if use_ewkm:
+        print(f"  EWKM enabled (gamma={ewkm_gamma}), feature weights computed.")
     
     # 5. Initialize Model
     input_dim = X_train_scaled.shape[1]
@@ -69,7 +76,9 @@ def main():
     ).to(device)
     
     # Initialize prototypes
-    model.faiia.initialize_all_prototypes(minority_prototypes, device)
+    ewkm_fw = proto_gen.feature_weights if use_ewkm else None
+    model.faiia.initialize_all_prototypes(minority_prototypes, device,
+                                          ewkm_feature_weights=ewkm_fw)
     
     print(f"\nModel initialized with {model.count_parameters():,} parameters.")
 

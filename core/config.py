@@ -16,7 +16,12 @@ V3_CONFIG = {
     'epochs': 150,
     'patience': 20,
     'label_smoothing': 0.05,
+    'use_ewkm': False,
+    'ewkm_gamma': 1.0,
 }
+
+# Config variant with EWKM enabled (for ablation)
+V3_EWKM_CONFIG = {**V3_CONFIG, 'use_ewkm': True, 'ewkm_gamma': 1.0}
 
 # Features dropped due to high correlation (> 0.95)
 DROPPED_FEATURES = [
