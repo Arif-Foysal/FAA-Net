@@ -11,8 +11,8 @@ EDA_CONFIG = {
     'num_heads': 4,
     'attention_dim': 32,
     'n_prototypes': 8,
-    'tau_min': 0.1,             # Minimum temperature (sharper attention)
-    'tau_max': 5.0,             # Maximum temperature (smoother attention)
+    'tau_min': 0.5,             # Minimum temperature (sharper attention)
+    'tau_max': 2.0,             # Maximum temperature (smoother attention)
     'tau_hidden_dim': 32,       # Hidden dim of entropy→temperature MLP
     'edt_mode': 'learned',      # 'learned', 'heuristic', or 'fixed'
     'normalize_entropy': True,  # Normalise entropy to [0, 1]
@@ -33,6 +33,7 @@ EDA_CONFIG = {
     # Loss
     'focal_gamma': 2.0,
     'entropy_reg_weight': 0.01,  # Weight for entropy regularisation term
+    'prototype_anchor_weight': 0.01,  # Weight for prototype anchoring loss
 }
 
 # Backward compatibility alias
@@ -52,11 +53,11 @@ ABLATION_CONFIGS = {
     # A3: Learned EDT without entropy normalisation
     'no_entropy_norm': {**EDA_CONFIG, 'normalize_entropy': False},
 
-    # A4: Narrow τ range — less adaptation capacity
-    'narrow_tau': {**EDA_CONFIG, 'tau_min': 0.5, 'tau_max': 2.0},
+    # A4: Narrow τ range — tighter adaptation
+    'narrow_tau': {**EDA_CONFIG, 'tau_min': 0.8, 'tau_max': 1.5},
 
-    # A5: Wide τ range — more adaptation capacity
-    'wide_tau': {**EDA_CONFIG, 'tau_min': 0.01, 'tau_max': 10.0},
+    # A5: Wide τ range — old default range
+    'wide_tau': {**EDA_CONFIG, 'tau_min': 0.1, 'tau_max': 5.0},
 }
 
 # ---------------------------------------------------------------------------

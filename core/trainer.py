@@ -80,9 +80,11 @@ def train_model(model, train_loader, val_loader, config, criterion, device,
 
             outputs = model(X_batch)
 
-            # Compute loss (with optional EDT regularisation)
+            # Compute loss (with optional EDT regularisation + prototype anchoring)
             if use_edt_loss and hasattr(model, 'last_edt_info') and model.last_edt_info is not None:
-                loss, _loss_components = criterion(outputs, y_smooth, model.last_edt_info)
+                anchor_loss = model.prototype_anchor_loss() if hasattr(model, 'prototype_anchor_loss') else None
+                loss, _loss_components = criterion(outputs, y_smooth, model.last_edt_info,
+                                                   prototype_anchor_loss=anchor_loss)
             else:
                 loss = criterion(outputs, y_smooth)
 
@@ -126,7 +128,9 @@ def train_model(model, train_loader, val_loader, config, criterion, device,
                 outputs = model(X_batch)
 
                 if use_edt_loss and hasattr(model, 'last_edt_info') and model.last_edt_info is not None:
-                    loss, _ = criterion(outputs, y_batch, model.last_edt_info)
+                    anchor_loss = model.prototype_anchor_loss() if hasattr(model, 'prototype_anchor_loss') else None
+                    loss, _ = criterion(outputs, y_batch, model.last_edt_info,
+                                        prototype_anchor_loss=anchor_loss)
                 else:
                     loss = criterion(outputs, y_batch)
 

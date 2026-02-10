@@ -92,6 +92,18 @@ class EDTAttentionHead(nn.Module):
             projected = self.query(proto_tensor)
             self.prototype_keys.data = projected.clone()
             self.prototype_values.data = projected.clone()
+            # Store initial positions for prototype anchoring regularization
+            self.register_buffer('_initial_keys', projected.clone())
+            self.register_buffer('_initial_values', projected.clone())
+
+    def prototype_anchor_loss(self):
+        """MSE between current and initial prototype positions (prevents drift)."""
+        if not hasattr(self, '_initial_keys') or self._initial_keys is None:
+            return torch.tensor(0.0, device=self.prototype_keys.device)
+        return (
+            F.mse_loss(self.prototype_keys, self._initial_keys) +
+            F.mse_loss(self.prototype_values, self._initial_values)
+        )
 
     def forward(self, x):
         """
@@ -144,6 +156,10 @@ class MultiHeadEDT(nn.Module):
         proto_tensor = torch.FloatTensor(prototype_features).to(device)
         for head in self.heads:
             head.initialize_prototypes(proto_tensor)
+
+    def prototype_anchor_loss(self):
+        """Sum prototype anchor losses across all attention heads."""
+        return sum(head.prototype_anchor_loss() for head in self.heads)
 
     def forward(self, x):
         head_outputs = []
@@ -258,6 +274,10 @@ class EDANet(nn.Module):
         )
 
         self.last_edt_info = None
+
+    def prototype_anchor_loss(self):
+        """Prototype anchoring regularization: prevents prototype drift from initialization."""
+        return self.edt_attention.prototype_anchor_loss()
 
     def forward(self, x, return_edt_info=False):
         # Input normalisation

@@ -125,14 +125,22 @@ class EDANetLoss(nn.Module):
         L_total = L_focal + λ_ent * L_entropy_reg
     """
 
-    def __init__(self, gamma=2.0, class_counts=None, entropy_reg_weight=0.01):
+    def __init__(self, gamma=2.0, class_counts=None, entropy_reg_weight=0.01,
+                 prototype_anchor_weight=0.01):
         super().__init__()
         self.focal_loss = ImbalanceAwareFocalLoss_Logits(
             gamma=gamma, class_counts=class_counts
         )
         self.entropy_reg = EntropyRegularization(weight=entropy_reg_weight)
+        self.prototype_anchor_weight = prototype_anchor_weight
 
-    def forward(self, logits, targets, edt_info=None):
+    def forward(self, logits, targets, edt_info=None, prototype_anchor_loss=None):
         focal = self.focal_loss(logits, targets)
         ent_reg = self.entropy_reg(edt_info) if edt_info is not None else 0.0
-        return focal + ent_reg, {'focal': focal.item(), 'entropy_reg': ent_reg.item() if torch.is_tensor(ent_reg) else 0.0}
+        anchor = self.prototype_anchor_weight * prototype_anchor_loss if prototype_anchor_loss is not None else 0.0
+        total = focal + ent_reg + anchor
+        return total, {
+            'focal': focal.item(),
+            'entropy_reg': ent_reg.item() if torch.is_tensor(ent_reg) else 0.0,
+            'prototype_anchor': anchor.item() if torch.is_tensor(anchor) else 0.0,
+        }
