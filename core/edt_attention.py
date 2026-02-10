@@ -180,3 +180,44 @@ class EDTAttention(nn.Module):
         }
 
         return output, attn_weights, edt_info
+
+    def forward_with_precomputed_logits(self, raw_logits, values):
+        """
+        EDT attention with pre-computed logits (e.g., from cosine similarity).
+        
+        Args:
+            raw_logits: (batch_size, n_keys)  pre-computed attention logits
+            values:     (n_keys, d_v)         value vectors (prototypes)
+        Returns:
+            output:       (batch_size, d_v)     attended output
+            attn_weights: (batch_size, n_keys)  attention weights
+            edt_info:     dict with entropy and tau for analysis
+        """
+        # Step 1: Compute per-sample entropy from pre-computed logits
+        # Use softmax without additional scaling since logits are already scaled
+        p = F.softmax(raw_logits, dim=-1)  # (B, K)
+        log_p = torch.log(p + 1e-8)
+        entropy = -torch.sum(p * log_p, dim=-1, keepdim=True)  # (B, 1)
+        
+        if self.normalize_entropy:
+            entropy = entropy / (self.max_entropy + 1e-8)
+            entropy = entropy.clamp(0.0, 1.0)
+
+        # Step 2: Dynamic temperature from entropy
+        tau = self.edt(entropy)  # (B, 1)
+
+        # Step 3: EDT-modulated attention (re-scale with temperature)
+        scaled_logits = raw_logits / (tau + 1e-8)  # (B, K)
+        attn_weights = F.softmax(scaled_logits, dim=-1)  # (B, K)
+        attn_weights = self.dropout(attn_weights)
+
+        # Step 4: Weighted combination of values
+        output = torch.matmul(attn_weights, values)  # (B, d_v)
+
+        edt_info = {
+            'entropy': entropy.detach(),
+            'tau': tau.detach(),
+            'raw_logits': raw_logits.detach()
+        }
+
+        return output, attn_weights, edt_info

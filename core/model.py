@@ -4,6 +4,12 @@ EDA-Net: Entropy-Dynamic Attention Network for Network Intrusion Detection.
 Replaces fixed-temperature attention with Entropy-Dynamic Temperature (EDT)
 attention that adapts softmax sharpness per-sample based on the information
 entropy of attention logits.
+
+Key innovations (v2):
+    - Learnable prototypes with cosine similarity attention
+    - Class-conditional prototype assignment for supervised learning
+    - Projection head for supervised contrastive learning
+    - Head diversity regularization for multi-head attention
 """
 
 import torch
@@ -11,6 +17,46 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.cluster import KMeans
 from .edt_attention import EDTAttention
+
+
+# ---------------------------------------------------------------------------
+#  Learnable Prototype Attention (replaces KMeans-based prototypes)
+# ---------------------------------------------------------------------------
+
+class LearnablePrototypes(nn.Module):
+    """
+    Learnable prototype embeddings with class-conditional assignment.
+    
+    Unlike KMeans prototypes which are fixed after initialization, these
+    prototypes are optimized end-to-end via backpropagation. Half of the
+    prototypes are designated for minority class, half for majority.
+    """
+    
+    def __init__(self, num_prototypes=16, prototype_dim=64, num_classes=2):
+        super().__init__()
+        self.num_prototypes = num_prototypes
+        self.prototype_dim = prototype_dim
+        self.num_classes = num_classes
+        
+        # Learnable prototype embeddings
+        self.prototypes = nn.Parameter(torch.randn(num_prototypes, prototype_dim) * 0.02)
+        
+        # Class assignment: first half → minority (class 1), second half → majority (class 0)
+        # This is a soft assignment that can be learned
+        self.prototype_class_logits = nn.Parameter(
+            torch.cat([
+                torch.ones(num_prototypes // 2, 1) * 2.0,   # bias toward class 1
+                torch.ones(num_prototypes - num_prototypes // 2, 1) * -2.0  # bias toward class 0
+            ], dim=0)
+        )
+        
+    def get_class_assignments(self):
+        """Return soft class assignments for each prototype."""
+        return torch.sigmoid(self.prototype_class_logits)  # (num_prototypes, 1)
+    
+    def forward(self):
+        """Return normalized prototypes."""
+        return F.normalize(self.prototypes, dim=-1)
 
 
 class MinorityPrototypeGenerator:
@@ -41,16 +87,24 @@ class EDTAttentionHead(nn.Module):
     """
     Single head of Entropy-Dynamic Temperature prototype attention.
 
-    Uses learnable prototype keys/values and modulates the softmax
-    temperature per sample based on entropy of the raw attention logits.
+    Uses learnable prototype keys/values with cosine similarity attention.
+    Modulates the softmax temperature per sample based on entropy of the 
+    raw attention logits.
+    
+    Key changes (v2):
+        - Cosine similarity instead of dot product (more stable gradients)
+        - Learnable temperature scale parameter
+        - Optional class-conditional prototype weighting
     """
 
     def __init__(self, input_dim, attention_dim=32, n_prototypes=4,
                  tau_min=0.1, tau_max=5.0, tau_hidden_dim=32,
-                 edt_mode='learned', dropout=0.1, normalize_entropy=True):
+                 edt_mode='learned', dropout=0.1, normalize_entropy=True,
+                 use_cosine_attention=True):
         super().__init__()
         self.attention_dim = attention_dim
         self.n_prototypes = n_prototypes
+        self.use_cosine_attention = use_cosine_attention
 
         # Query projection
         self.query = nn.Linear(input_dim, attention_dim)
@@ -62,6 +116,9 @@ class EDTAttentionHead(nn.Module):
         self.prototype_values = nn.Parameter(
             torch.randn(n_prototypes, attention_dim) * 0.02
         )
+        
+        # Learnable attention scale (for cosine similarity)
+        self.attention_scale = nn.Parameter(torch.ones(1) * 10.0)
 
         # EDT attention mechanism (core innovation)
         self.edt_attention = EDTAttention(
@@ -115,20 +172,34 @@ class EDTAttentionHead(nn.Module):
             edt_info:     dict with entropy and tau
         """
         q = self.query(x)  # (B, attention_dim)
-        output, attn_weights, edt_info = self.edt_attention(
-            q, self.prototype_keys, self.prototype_values
-        )
+        
+        # Use cosine similarity attention for stability
+        if self.use_cosine_attention:
+            q_norm = F.normalize(q, dim=-1)
+            k_norm = F.normalize(self.prototype_keys, dim=-1)
+            # Cosine similarity scaled by learnable parameter
+            raw_attn = torch.mm(q_norm, k_norm.T) * self.attention_scale.clamp(min=1.0, max=50.0)
+            # Pass through EDT for temperature modulation
+            output, attn_weights, edt_info = self.edt_attention.forward_with_precomputed_logits(
+                raw_attn, self.prototype_values
+            )
+        else:
+            output, attn_weights, edt_info = self.edt_attention(
+                q, self.prototype_keys, self.prototype_values
+            )
+        
         output = self.output_proj(output)
         output = self.layer_norm(output)
         return output, attn_weights, edt_info
 
 
 class MultiHeadEDT(nn.Module):
-    """Multi-head EDT attention with head fusion and residual connection."""
+    """Multi-head EDT attention with head fusion, residual connection, and diversity regularization."""
 
     def __init__(self, input_dim, num_heads=4, attention_dim=32, n_prototypes=4,
                  tau_min=0.1, tau_max=5.0, tau_hidden_dim=32,
-                 edt_mode='learned', dropout=0.1, normalize_entropy=True):
+                 edt_mode='learned', dropout=0.1, normalize_entropy=True,
+                 use_cosine_attention=True):
         super().__init__()
         self.num_heads = num_heads
         self.attention_dim = attention_dim
@@ -143,7 +214,8 @@ class MultiHeadEDT(nn.Module):
                 tau_hidden_dim=tau_hidden_dim,
                 edt_mode=edt_mode,
                 dropout=dropout,
-                normalize_entropy=normalize_entropy
+                normalize_entropy=normalize_entropy,
+                use_cosine_attention=use_cosine_attention
             )
             for _ in range(num_heads)
         ])
@@ -160,6 +232,26 @@ class MultiHeadEDT(nn.Module):
     def prototype_anchor_loss(self):
         """Sum prototype anchor losses across all attention heads."""
         return sum(head.prototype_anchor_loss() for head in self.heads)
+
+    def head_diversity_loss(self):
+        """
+        Penalize redundant heads by minimizing cosine similarity between
+        prototype key matrices of different heads.
+        
+        This encourages each head to attend to different aspects of the input.
+        """
+        loss = torch.tensor(0.0, device=self.heads[0].prototype_keys.device)
+        for i in range(self.num_heads):
+            for j in range(i + 1, self.num_heads):
+                # Flatten keys for each head
+                ki = self.heads[i].prototype_keys.flatten()
+                kj = self.heads[j].prototype_keys.flatten()
+                # Cosine similarity
+                cos_sim = F.cosine_similarity(ki.unsqueeze(0), kj.unsqueeze(0))
+                loss = loss + cos_sim ** 2
+        # Normalize by number of pairs
+        n_pairs = self.num_heads * (self.num_heads - 1) / 2
+        return loss / max(n_pairs, 1)
 
     def forward(self, x):
         head_outputs = []
@@ -203,22 +295,30 @@ class EDANet(nn.Module):
     Architecture:
         Input → BatchNorm → Multi-Head EDT Attention → SE Block
               → Hidden MLP Blocks (with residuals) → Classifier Head
+        (Optional) → Projection Head for Supervised Contrastive Learning
 
     The EDT attention adaptively modulates softmax temperature per sample
     based on the information entropy of the attention logits:
         - Ambiguous samples (high entropy) → sharp attention (low τ)
         - Confident samples (low entropy)  → smooth attention (high τ)
+    
+    Key innovations (v2):
+        - Cosine similarity attention for gradient stability
+        - Supervised contrastive learning projection head
+        - Head diversity regularization
     """
 
     def __init__(self, input_dim, num_heads=4, attention_dim=32, n_prototypes=8,
                  hidden_units=[256, 128, 64], dropout_rate=0.3, attention_dropout=0.1,
                  tau_min=0.1, tau_max=5.0, tau_hidden_dim=32, edt_mode='learned',
-                 normalize_entropy=True, num_classes=1, output_logits=False):
+                 normalize_entropy=True, num_classes=1, output_logits=False,
+                 use_cosine_attention=True, projection_dim=64):
         super().__init__()
 
         self.input_dim = input_dim
         self.output_logits = output_logits
         self.edt_mode = edt_mode
+        self.projection_dim = projection_dim
 
         # Input normalisation
         self.input_norm = nn.BatchNorm1d(input_dim)
@@ -234,7 +334,8 @@ class EDANet(nn.Module):
             tau_hidden_dim=tau_hidden_dim,
             edt_mode=edt_mode,
             dropout=attention_dropout,
-            normalize_entropy=normalize_entropy
+            normalize_entropy=normalize_entropy,
+            use_cosine_attention=use_cosine_attention
         )
 
         # Squeeze-and-Excitation block
@@ -272,14 +373,31 @@ class EDANet(nn.Module):
             nn.Dropout(dropout_rate / 2),
             nn.Linear(32, num_classes)
         )
+        
+        # Projection head for supervised contrastive learning
+        self.projection_head = nn.Sequential(
+            nn.Linear(prev_dim, prev_dim),
+            nn.BatchNorm1d(prev_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(prev_dim, projection_dim)
+        )
 
         self.last_edt_info = None
+        self._last_embeddings = None  # Store for SupCon loss
 
     def prototype_anchor_loss(self):
         """Prototype anchoring regularization: prevents prototype drift from initialization."""
         return self.edt_attention.prototype_anchor_loss()
 
-    def forward(self, x, return_edt_info=False):
+    def head_diversity_loss(self):
+        """Head diversity regularization: penalizes redundant attention heads."""
+        return self.edt_attention.head_diversity_loss()
+
+    def get_embeddings(self):
+        """Return the last computed embeddings (for SupCon loss)."""
+        return self._last_embeddings
+
+    def forward(self, x, return_edt_info=False, return_embeddings=False):
         # Input normalisation
         x = self.input_norm(x)
 
@@ -296,6 +414,12 @@ class EDANet(nn.Module):
             residual = res_proj(h)
             h = block(h) + residual
 
+        # Store embeddings before classifier (for contrastive learning)
+        self._last_embeddings = h
+        
+        # Compute projection for SupCon loss (L2-normalized)
+        projection = F.normalize(self.projection_head(h), dim=-1)
+
         # Final classification
         logits = self.classifier_head(h)
 
@@ -307,9 +431,12 @@ class EDANet(nn.Module):
         # Store for post-hoc analysis
         self.last_edt_info = {
             'edt_attention': edt_info,
-            'se_weights': se_weights.detach()
+            'se_weights': se_weights.detach(),
+            'projection': projection  # For SupCon loss
         }
 
+        if return_embeddings:
+            return output, self.last_edt_info, projection
         if return_edt_info:
             return output, self.last_edt_info
         return output

@@ -1,5 +1,11 @@
 """
 Configuration for EDA-Net (Entropy-Dynamic Attention Network) and Ablation Studies.
+
+Version 2 additions:
+    - Cosine similarity attention
+    - Supervised contrastive learning
+    - Head diversity regularization
+    - Asymmetric loss option
 """
 
 # ---------------------------------------------------------------------------
@@ -16,11 +22,13 @@ EDA_CONFIG = {
     'tau_hidden_dim': 32,       # Hidden dim of entropy→temperature MLP
     'edt_mode': 'learned',      # 'learned', 'heuristic', or 'fixed'
     'normalize_entropy': True,  # Normalise entropy to [0, 1]
+    'use_cosine_attention': True,  # Use cosine similarity (v2)
 
     # Network Architecture
     'hidden_units': [256, 128, 64],
     'dropout_rate': 0.3,
     'attention_dropout': 0.1,
+    'projection_dim': 64,       # Dimension of SupCon projection head
 
     # Training
     'learning_rate': 0.001,
@@ -30,10 +38,13 @@ EDA_CONFIG = {
     'patience': 20,
     'label_smoothing': 0.05,
 
-    # Loss
+    # Loss (v2: added SupCon and head diversity)
     'focal_gamma': 2.0,
-    'entropy_reg_weight': 0.01,  # Weight for entropy regularisation term
+    'entropy_reg_weight': 0.01,       # Weight for entropy regularisation term
     'prototype_anchor_weight': 0.01,  # Weight for prototype anchoring loss
+    'supcon_weight': 0.1,             # Weight for supervised contrastive loss
+    'head_diversity_weight': 0.01,    # Weight for head diversity penalty
+    'use_asymmetric_loss': False,     # Use ASL instead of focal loss
 }
 
 # Backward compatibility alias
@@ -58,6 +69,15 @@ ABLATION_CONFIGS = {
 
     # A5: Wide τ range — old default range
     'wide_tau': {**EDA_CONFIG, 'tau_min': 0.1, 'tau_max': 5.0},
+    
+    # A6: Without SupCon loss
+    'no_supcon': {**EDA_CONFIG, 'supcon_weight': 0.0},
+    
+    # A7: Without cosine attention (original dot product)
+    'no_cosine': {**EDA_CONFIG, 'use_cosine_attention': False},
+    
+    # A8: Asymmetric loss instead of focal
+    'asymmetric_loss': {**EDA_CONFIG, 'use_asymmetric_loss': True},
 }
 
 # ---------------------------------------------------------------------------

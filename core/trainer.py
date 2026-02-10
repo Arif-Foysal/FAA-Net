@@ -1,5 +1,11 @@
 """
 Training loop for EDA-Net with EDT-specific metric logging.
+
+Supports:
+    - EDT metrics (temperature, entropy)
+    - Supervised contrastive learning
+    - Prototype anchoring loss
+    - Head diversity regularization
 """
 
 import torch
@@ -47,6 +53,7 @@ def train_model(model, train_loader, val_loader, config, criterion, device,
         'mean_tau': [],       # EDT: average temperature per epoch
         'mean_entropy': [],   # EDT: average entropy per epoch
         'tau_std': [],        # EDT: temperature std (adaptation measure)
+        'supcon_loss': [],    # SupCon loss component
     }
 
     best_val_f1 = 0.0
@@ -66,13 +73,14 @@ def train_model(model, train_loader, val_loader, config, criterion, device,
         model.train()
         train_loss = 0.0
         train_preds, train_labels = [], []
-        epoch_taus, epoch_entropies = [], []
+        epoch_taus, epoch_entropies = []
+        epoch_supcon = []
 
         for X_batch, y_batch in train_loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
             optimizer.zero_grad()
 
-            # Label smoothing
+            # Label smoothing (for classification loss only)
             if label_smooth > 0:
                 y_smooth = y_batch * (1 - label_smooth) + 0.5 * label_smooth
             else:
@@ -80,11 +88,19 @@ def train_model(model, train_loader, val_loader, config, criterion, device,
 
             outputs = model(X_batch)
 
-            # Compute loss (with optional EDT regularisation + prototype anchoring)
+            # Compute loss (with optional EDT regularisation + SupCon + diversity)
             if use_edt_loss and hasattr(model, 'last_edt_info') and model.last_edt_info is not None:
                 anchor_loss = model.prototype_anchor_loss() if hasattr(model, 'prototype_anchor_loss') else None
-                loss, _loss_components = criterion(outputs, y_smooth, model.last_edt_info,
-                                                   prototype_anchor_loss=anchor_loss)
+                diversity_loss = model.head_diversity_loss() if hasattr(model, 'head_diversity_loss') else None
+                
+                loss, loss_components = criterion(
+                    outputs, y_smooth, model.last_edt_info,
+                    prototype_anchor_loss=anchor_loss,
+                    head_diversity_loss=diversity_loss,
+                    labels_for_supcon=y_batch  # Use original labels for SupCon
+                )
+                if 'supcon' in loss_components:
+                    epoch_supcon.append(loss_components['supcon'])
             else:
                 loss = criterion(outputs, y_smooth)
 
@@ -129,8 +145,13 @@ def train_model(model, train_loader, val_loader, config, criterion, device,
 
                 if use_edt_loss and hasattr(model, 'last_edt_info') and model.last_edt_info is not None:
                     anchor_loss = model.prototype_anchor_loss() if hasattr(model, 'prototype_anchor_loss') else None
-                    loss, _ = criterion(outputs, y_batch, model.last_edt_info,
-                                        prototype_anchor_loss=anchor_loss)
+                    diversity_loss = model.head_diversity_loss() if hasattr(model, 'head_diversity_loss') else None
+                    loss, _ = criterion(
+                        outputs, y_batch, model.last_edt_info,
+                        prototype_anchor_loss=anchor_loss,
+                        head_diversity_loss=diversity_loss,
+                        labels_for_supcon=y_batch
+                    )
                 else:
                     loss = criterion(outputs, y_batch)
 
@@ -172,6 +193,12 @@ def train_model(model, train_loader, val_loader, config, criterion, device,
             history['mean_entropy'].append(all_ent.mean().item())
         else:
             history['mean_entropy'].append(0.0)
+
+        # SupCon tracking
+        if epoch_supcon:
+            history['supcon_loss'].append(sum(epoch_supcon) / len(epoch_supcon))
+        else:
+            history['supcon_loss'].append(0.0)
 
         # ---- Early Stopping ----
         if val_f1 > best_val_f1:
