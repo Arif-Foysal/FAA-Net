@@ -83,25 +83,25 @@ def main():
 
     results = {}
 
-    # --- Experiment 1: Vanilla DNN + BCE ---
-    model_1 = VanillaDNN_Ablation(input_dim=input_dim).to(device)
-    criterion_1 = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    results['Vanilla DNN + BCE'], _ = run_experiment(
-        "VanillaDNN_BCE", model_1, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_1, device
-    )
+    # # --- Experiment 1: Vanilla DNN + BCE ---
+    # model_1 = VanillaDNN_Ablation(input_dim=input_dim).to(device)
+    # criterion_1 = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    # results['Vanilla DNN + BCE'], _ = run_experiment(
+    #     "VanillaDNN_BCE", model_1, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_1, device
+    # )
 
-    # --- Experiment 2: Vanilla DNN + Focal Loss ---
-    model_2 = VanillaDNN_Ablation(input_dim=input_dim).to(device)
-    criterion_2 = ImbalanceAwareFocalLoss_Logits(class_counts=class_counts, gamma=2.0)
-    results['Vanilla DNN + Focal'], history_vanilla = run_experiment(
-        "VanillaDNN_Focal", model_2, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_2, device
-    )
-    # Save Vanilla History
-    save_training_history_path = "vanilladnn_history.csv"
-    if os.path.exists("/content/drive/MyDrive/FAIIA_Models"):
-        save_training_history_path = os.path.join("/content/drive/MyDrive/FAIIA_Models", "vanilladnn_history.csv")
-    pd.DataFrame(history_vanilla).to_csv(save_training_history_path, index=False)
-    print(f"Saved Vanilla DNN history to {save_training_history_path}")
+    # # --- Experiment 2: Vanilla DNN + Focal Loss ---
+    # model_2 = VanillaDNN_Ablation(input_dim=input_dim).to(device)
+    # criterion_2 = ImbalanceAwareFocalLoss_Logits(class_counts=class_counts, gamma=2.0)
+    # results['Vanilla DNN + Focal'], history_vanilla = run_experiment(
+    #     "VanillaDNN_Focal", model_2, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_2, device
+    # )
+    # # Save Vanilla History
+    # save_training_history_path = "vanilladnn_history.csv"
+    # if os.path.exists("/content/drive/MyDrive/FAIIA_Models"):
+    #     save_training_history_path = os.path.join("/content/drive/MyDrive/FAIIA_Models", "vanilladnn_history.csv")
+    # pd.DataFrame(history_vanilla).to_csv(save_training_history_path, index=False)
+    # print(f"Saved Vanilla DNN history to {save_training_history_path}")
 
     # --- Setup for EDAN Ablation (Prototypes) ---
     minority_mask = y_train.values == 1
@@ -109,25 +109,25 @@ def main():
     proto_gen = MinorityPrototypeGenerator(n_prototypes=V3_CONFIG['n_prototypes'], random_state=RANDOM_STATE)
     prototypes = proto_gen.fit(X_minority)
 
-    # --- Experiment 3: FAIIA (EDAN v3) + BCE ---
-    model_3 = EDANv3_Ablation(
-        input_dim=input_dim, num_heads=V3_CONFIG['num_heads'], attention_dim=V3_CONFIG['attention_dim']
-    ).to(device)
-    model_3.faiia.initialize_all_prototypes(prototypes, device)
-    criterion_3 = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    results['FAIIA + BCE'], _ = run_experiment(
-        "FAIIA_BCE", model_3, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_3, device
-    )
+    # # --- Experiment 3: FAIIA (EDAN v3) + BCE ---
+    # model_3 = EDANv3_Ablation(
+    #     input_dim=input_dim, num_heads=V3_CONFIG['num_heads'], attention_dim=V3_CONFIG['attention_dim']
+    # ).to(device)
+    # model_3.faiia.initialize_all_prototypes(prototypes, device)
+    # criterion_3 = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    # results['FAIIA + BCE'], _ = run_experiment(
+    #     "FAIIA_BCE", model_3, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_3, device
+    # )
 
-    # --- Experiment 4: FAIIA (EDAN v3) + Focal Loss ---
-    model_4 = EDANv3_Ablation(
-        input_dim=input_dim, num_heads=V3_CONFIG['num_heads'], attention_dim=V3_CONFIG['attention_dim']
-    ).to(device)
-    model_4.faiia.initialize_all_prototypes(prototypes, device)
-    criterion_4 = ImbalanceAwareFocalLoss_Logits(class_counts=class_counts, gamma=2.0)
-    results['FAIIA + Focal'], _ = run_experiment(
-        "FAIIA_Focal", model_4, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_4, device
-    )
+    # # --- Experiment 4: FAIIA (EDAN v3) + Focal Loss ---
+    # model_4 = EDANv3_Ablation(
+    #     input_dim=input_dim, num_heads=V3_CONFIG['num_heads'], attention_dim=V3_CONFIG['attention_dim']
+    # ).to(device)
+    # model_4.faiia.initialize_all_prototypes(prototypes, device)
+    # criterion_4 = ImbalanceAwareFocalLoss_Logits(class_counts=class_counts, gamma=2.0)
+    # results['FAIIA + Focal'], _ = run_experiment(
+    #     "FAIIA_Focal", model_4, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_4, device
+    # )
 
     # --- Experiment 5: FAIIA + Evidential Loss (no focal) ---
     model_5 = EDANv3(
