@@ -3,7 +3,8 @@ import torch
 import torch.nn as nn
 import time
 import copy
-from .utils import evaluate_model
+import numpy as np
+from .utils import evaluate_model, find_optimal_threshold
 from sklearn.metrics import f1_score, recall_score
 
 def train_model(model, train_loader, val_loader, config, criterion, device):
@@ -58,6 +59,9 @@ def train_model(model, train_loader, val_loader, config, criterion, device):
         train_preds, train_labels = [], []
         epoch_epistemic_u = []
 
+        train_probs_epoch = []  # Collect probs for threshold tuning
+        train_labels_raw = []   # Corresponding labels
+
         for X_batch, y_batch in train_loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
             optimizer.zero_grad()
@@ -69,7 +73,11 @@ def train_model(model, train_loader, val_loader, config, criterion, device):
                 loss_dict = criterion(outputs, y_batch, epoch=epoch)
                 loss = loss_dict['total_loss']
 
-                preds = (outputs['attack_prob'] > 0.5).cpu().numpy().flatten()
+                batch_probs = outputs['attack_prob'].detach().cpu().numpy().flatten()
+                train_probs_epoch.extend(batch_probs)
+                train_labels_raw.extend(y_batch.cpu().numpy().flatten())
+                # Use 0.5 as preliminary threshold during training (tuned below)
+                preds = (batch_probs > 0.5).astype(int)
                 epoch_epistemic_u.append(
                     outputs['epistemic_uncertainty'].detach().cpu().mean().item()
                 )
@@ -98,6 +106,15 @@ def train_model(model, train_loader, val_loader, config, criterion, device):
         scheduler.step()
 
         train_loss /= len(train_loader.dataset)
+
+        # For evidential models, find the optimal threshold on training probs
+        if is_evidential and len(train_probs_epoch) > 0:
+            opt_threshold, _ = find_optimal_threshold(
+                np.array(train_labels_raw), np.array(train_probs_epoch), metric='f1'
+            )
+            # Recompute train predictions with the tuned threshold
+            train_preds = (np.array(train_probs_epoch) > opt_threshold).astype(int).tolist()
+
         train_f1 = f1_score(train_labels, train_preds, zero_division=0)
         train_recall = recall_score(train_labels, train_preds, zero_division=0)
 
@@ -105,6 +122,7 @@ def train_model(model, train_loader, val_loader, config, criterion, device):
         model.eval()
         val_loss = 0.0
         val_preds, val_labels = [], []
+        val_probs_epoch = []
         val_epistemic_u = []
 
         with torch.no_grad():
@@ -116,7 +134,8 @@ def train_model(model, train_loader, val_loader, config, criterion, device):
                     loss_dict_val = criterion(outputs, y_batch, epoch=epoch)
                     loss = loss_dict_val['total_loss']
 
-                    preds = (outputs['attack_prob'] > 0.5).cpu().numpy().flatten()
+                    batch_probs = outputs['attack_prob'].cpu().numpy().flatten()
+                    val_probs_epoch.extend(batch_probs)
                     val_epistemic_u.append(
                         outputs['epistemic_uncertainty'].cpu().mean().item()
                     )
@@ -127,12 +146,20 @@ def train_model(model, train_loader, val_loader, config, criterion, device):
                         preds = (torch.sigmoid(outputs) > 0.5).cpu().numpy().flatten()
                     else:
                         preds = (outputs > 0.5).cpu().numpy().flatten()
+                    val_preds.extend(preds)
 
                 val_loss += loss.item() * X_batch.size(0)
-                val_preds.extend(preds)
                 val_labels.extend(y_batch.cpu().numpy().flatten())
 
         val_loss /= len(val_loader.dataset)
+
+        # For evidential, find optimal threshold on validation probs
+        if is_evidential and len(val_probs_epoch) > 0:
+            val_opt_threshold, _ = find_optimal_threshold(
+                np.array(val_labels), np.array(val_probs_epoch), metric='f1'
+            )
+            val_preds = (np.array(val_probs_epoch) > val_opt_threshold).astype(int).tolist()
+
         val_f1 = f1_score(val_labels, val_preds, zero_division=0)
         val_recall = recall_score(val_labels, val_preds, zero_division=0)
 
@@ -147,7 +174,6 @@ def train_model(model, train_loader, val_loader, config, criterion, device):
         history['lr'].append(current_lr)
 
         if is_evidential:
-            import numpy as np
             history['train_epistemic_u'].append(np.mean(epoch_epistemic_u) if epoch_epistemic_u else 0.0)
             history['val_epistemic_u'].append(np.mean(val_epistemic_u) if val_epistemic_u else 0.0)
             history['kl_loss'].append(loss_dict['kl_loss'].item())

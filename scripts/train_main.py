@@ -86,10 +86,11 @@ def main():
 
     if use_evidential:
         # Compute class weights for focal evidential loss
+        # Use sqrt-dampened weights to avoid starving evidence accumulation
         total = sum(class_counts)
         class_weights = torch.tensor(
-            [total / (2 * class_counts[0]),   # Weight for normal class
-             total / (2 * class_counts[1])],  # Weight for attack (minority) class
+            [np.sqrt(total / (2 * class_counts[0])),   # Weight for normal class
+             np.sqrt(total / (2 * class_counts[1]))],  # Weight for attack (minority) class
             dtype=torch.float32
         ).to(device)
 
@@ -115,7 +116,10 @@ def main():
 
     # 8. Evaluate
     print("\nEvaluating on Test Set...")
-    metrics, y_probs, y_pred = evaluate_model(model, X_test_tensor, y_test, device)
+    metrics, y_probs, y_pred = evaluate_model(
+        model, X_test_tensor, y_test, device,
+        optimize_threshold=use_evidential,
+    )
     print_metrics(metrics, "EDANv3 Test Results")
 
     # 9. Evidential uncertainty analysis

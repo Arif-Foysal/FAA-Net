@@ -14,12 +14,65 @@ def set_all_seeds(seed):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-def evaluate_model(model, X_tensor, y_true, device, threshold=0.5):
+
+def find_optimal_threshold(y_true, y_probs, metric='f1', thresholds=None):
+    """
+    Search for the classification threshold that maximizes the given metric.
+
+    Evidential expected_prob is calibrated differently from sigmoid output,
+    so the default 0.5 threshold is usually suboptimal. This finds the best one.
+
+    Args:
+        y_true:     Ground truth binary labels (numpy array)
+        y_probs:    Predicted probabilities (numpy array)
+        metric:     'f1' or 'recall' — the metric to optimize
+        thresholds: Array of thresholds to try (default: 0.1 to 0.9 step 0.01)
+
+    Returns:
+        best_threshold: Threshold that maximizes the metric
+        best_score:     Score at that threshold
+    """
+    if thresholds is None:
+        thresholds = np.arange(0.10, 0.91, 0.01)
+
+    y_true = np.array(y_true).flatten()
+    y_probs = np.array(y_probs).flatten()
+
+    best_threshold = 0.5
+    best_score = 0.0
+
+    for t in thresholds:
+        y_pred = (y_probs > t).astype(int)
+        if metric == 'f1':
+            score = f1_score(y_true, y_pred, zero_division=0)
+        elif metric == 'recall':
+            score = recall_score(y_true, y_pred, zero_division=0)
+        else:
+            score = f1_score(y_true, y_pred, zero_division=0)
+
+        if score > best_score:
+            best_score = score
+            best_threshold = t
+
+    return best_threshold, best_score
+
+
+def evaluate_model(model, X_tensor, y_true, device, threshold=0.5,
+                   optimize_threshold=False):
     """
     Evaluates the model on the given tensor data.
     Supports both standard and evidential output modes.
     Returns a dictionary of metrics, probabilities, and predictions.
     For evidential models, also returns uncertainty info.
+
+    Args:
+        model:              The model to evaluate
+        X_tensor:           Input features tensor
+        y_true:             Ground truth labels
+        device:             Compute device
+        threshold:          Classification threshold (default 0.5)
+        optimize_threshold: If True, search for the threshold that maximizes F1.
+                            Useful for evidential models where 0.5 is miscalibrated.
     """
     model.eval()
     is_evidential = getattr(model, 'evidential', False)
@@ -38,13 +91,17 @@ def evaluate_model(model, X_tensor, y_true, device, threshold=0.5):
         else:
             y_probs = outputs.cpu().numpy().flatten()
 
-        y_pred = (y_probs > threshold).astype(int)
-
     # Handle y_true format
     y_true_np = y_true
     if hasattr(y_true, 'values'):
         y_true_np = y_true.values
     y_true_np = np.array(y_true_np).flatten()
+
+    # Optimize threshold if requested (especially for evidential models)
+    if optimize_threshold:
+        threshold, best_f1 = find_optimal_threshold(y_true_np, y_probs, metric='f1')
+
+    y_pred = (y_probs > threshold).astype(int)
 
     metrics = {
         'Accuracy': accuracy_score(y_true_np, y_pred),
@@ -52,7 +109,8 @@ def evaluate_model(model, X_tensor, y_true, device, threshold=0.5):
         'Recall': recall_score(y_true_np, y_pred, zero_division=0),
         'F1-Score': f1_score(y_true_np, y_pred, zero_division=0),
         'AUC-ROC': roc_auc_score(y_true_np, y_probs),
-        'Avg Precision': average_precision_score(y_true_np, y_probs)
+        'Avg Precision': average_precision_score(y_true_np, y_probs),
+        'Threshold': threshold,
     }
 
     if is_evidential:

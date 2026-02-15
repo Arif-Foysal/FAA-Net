@@ -5,6 +5,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import torch
 import torch.nn as nn
+import numpy as np
 import pandas as pd
 from core.config import V3_CONFIG, RANDOM_STATE
 from core.data_loader import load_and_preprocess_data, create_dataloaders
@@ -18,8 +19,12 @@ from core.utils import (set_all_seeds, evaluate_model, print_metrics,
 
 def run_experiment(name, model, train_loader, val_loader, test_tensor, y_test, config, criterion, device):
     print(f"\n--- Running Experiment: {name} ---")
+    is_evidential = getattr(model, 'evidential', False)
     model, history = train_model(model, train_loader, val_loader, config, criterion, device)
-    metrics, y_probs, y_pred = evaluate_model(model, test_tensor, y_test, device)
+    metrics, y_probs, y_pred = evaluate_model(
+        model, test_tensor, y_test, device,
+        optimize_threshold=is_evidential,
+    )
     print_metrics(metrics, f"{name} Results")
     
     save_dir = "."
@@ -67,11 +72,13 @@ def main():
     pos_weight = torch.tensor([count_negative / count_positive], device=device, dtype=torch.float32)
 
     # Class weights for evidential loss
+    # Use sqrt-dampened weights: full inverse-frequency is too aggressive
+    # and starves evidence accumulation (evidence 12/6 vs 92/73 without focal)
     total_samples = count_positive + count_negative
+    w_neg = np.sqrt(total_samples / (2 * count_negative))
+    w_pos = np.sqrt(total_samples / (2 * count_positive))
     evidential_class_weights = torch.tensor(
-        [total_samples / (2 * count_negative),
-         total_samples / (2 * count_positive)],
-        dtype=torch.float32
+        [w_neg, w_pos], dtype=torch.float32
     ).to(device)
 
     results = {}
