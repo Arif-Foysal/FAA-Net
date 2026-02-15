@@ -2,6 +2,7 @@
 import sys
 import os
 import pandas as pd
+import numpy as np
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import torch
@@ -10,8 +11,11 @@ from core.config import V3_CONFIG, RANDOM_STATE
 from core.data_loader import load_and_preprocess_data, create_dataloaders
 from core.model import EDANv3, MinorityPrototypeGenerator
 from core.loss import ImbalanceAwareFocalLoss_Logits
+from core.evidential import FocalEvidentialLoss
 from core.trainer import train_model
-from core.utils import set_all_seeds, evaluate_model, print_metrics, save_training_history, save_predictions
+from core.utils import (set_all_seeds, evaluate_model, print_metrics,
+                        save_training_history, save_predictions,
+                        evaluate_evidential_uncertainty, calibrate_epistemic_threshold)
 
 def main():
     print("="*60)
@@ -23,13 +27,19 @@ def main():
     print(f"Using device: {device}")
     set_all_seeds(RANDOM_STATE)
 
+    use_evidential = V3_CONFIG.get('evidential', False)
+    if use_evidential:
+        print("Mode: Evidential Deep Learning (EDL)")
+    else:
+        print("Mode: Standard (sigmoid/logit output)")
+
     # 2. Data Loading
     # Check if we are in colab or local
     data_dir = "/content"
     if not os.path.exists(data_dir):
         data_dir = "." # Fallback to current dir if not in Colab
         
-    X_train_scaled, X_test_scaled, y_train, y_test, _, _ = load_and_preprocess_data(data_dir=data_dir)
+    X_train_scaled, X_test_scaled, y_train, y_test, y_train_cat, y_test_cat = load_and_preprocess_data(data_dir=data_dir)
     
     # 3. Create DataLoaders
     train_loader, val_loader, test_loader, X_test_tensor = create_dataloaders(
@@ -39,9 +49,6 @@ def main():
 
     # 4. Extract Minority Prototypes
     print("\nExtracting Minority Prototypes...")
-    # Re-construct X_train from scaler to extract minority? 
-    # load_and_preprocess_data returns scaled data.
-    # We need to filter X_train_scaled by y_train
     minority_mask = y_train.values == 1
     X_minority = X_train_scaled[minority_mask]
     X_majority = X_train_scaled[~minority_mask]
@@ -65,21 +72,41 @@ def main():
         focal_alpha=V3_CONFIG['focal_alpha'],
         focal_gamma=V3_CONFIG['focal_gamma'],
         num_classes=1,
-        output_logits=True # Use Logits for stability (consistent with Ablation)
+        output_logits=True if not use_evidential else False,
+        evidential=use_evidential,
     ).to(device)
     
     # Initialize prototypes
     model.faiia.initialize_all_prototypes(minority_prototypes, device)
     
-    print(f"\nModel initialized with {model.count_parameters():,} parameters.")
+    print(f"\nModel initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} parameters.")
 
     # 6. Loss Function
-    # Use ImbalanceAwareFocalLoss_Logits for numerical stability (consistent with Ablation)
     class_counts = [len(X_majority), len(X_minority)]
-    criterion = ImbalanceAwareFocalLoss_Logits(
-        gamma=V3_CONFIG['focal_gamma'],
-        class_counts=class_counts # Use calculated weights
-    )
+
+    if use_evidential:
+        # Compute class weights for focal evidential loss
+        total = sum(class_counts)
+        class_weights = torch.tensor(
+            [total / (2 * class_counts[0]),   # Weight for normal class
+             total / (2 * class_counts[1])],  # Weight for attack (minority) class
+            dtype=torch.float32
+        ).to(device)
+
+        criterion = FocalEvidentialLoss(
+            num_classes=2,
+            annealing_epochs=V3_CONFIG.get('annealing_epochs', 10),
+            gamma=V3_CONFIG.get('evidential_focal_gamma', 2.0),
+            class_weights=class_weights,
+        ).to(device)
+        print(f"  Loss: FocalEvidentialLoss (γ={V3_CONFIG.get('evidential_focal_gamma', 2.0)}, "
+              f"anneal={V3_CONFIG.get('annealing_epochs', 10)} epochs)")
+        print(f"  Class weights: normal={class_weights[0]:.3f}, attack={class_weights[1]:.3f}")
+    else:
+        criterion = ImbalanceAwareFocalLoss_Logits(
+            gamma=V3_CONFIG['focal_gamma'],
+            class_counts=class_counts
+        )
 
     # 7. Train
     model, history = train_model(
@@ -90,17 +117,55 @@ def main():
     print("\nEvaluating on Test Set...")
     metrics, y_probs, y_pred = evaluate_model(model, X_test_tensor, y_test, device)
     print_metrics(metrics, "EDANv3 Test Results")
-    
-    # Save artifacts
+
+    # 9. Evidential uncertainty analysis
+    if use_evidential:
+        print("\n" + "="*60)
+        print("Evidential Uncertainty Analysis")
+        print("="*60)
+
+        # Detailed per-sample analysis
+        results_df, summary = evaluate_evidential_uncertainty(
+            model, X_test_tensor, y_test, device,
+            y_categories=y_test_cat,
+        )
+
+        print(f"\n  Overall epistemic U:  {summary['overall_epistemic_u_mean']:.4f} ± {summary['overall_epistemic_u_std']:.4f}")
+        print(f"  Correct predictions:  {summary['correct_epistemic_u_mean']:.4f}")
+        print(f"  Incorrect predictions: {summary['incorrect_epistemic_u_mean']:.4f}")
+        print(f"  Normal samples:       {summary['normal_epistemic_u_mean']:.4f}")
+        print(f"  Attack samples:       {summary['attack_epistemic_u_mean']:.4f}")
+
+        if 'epistemic_u_by_category' in summary:
+            print("\n  Epistemic U by attack category:")
+            for cat, u_val in sorted(summary['epistemic_u_by_category'].items(),
+                                      key=lambda x: x[1], reverse=True):
+                print(f"    Category {cat:>3}: {u_val:.4f}")
+
+        # Calibrate threshold for zero-day detection
+        print("\nCalibrating epistemic threshold on training data...")
+        X_train_tensor = torch.FloatTensor(X_train_scaled).to(device)
+        epistemic_threshold = calibrate_epistemic_threshold(
+            model, X_train_tensor, device,
+            percentile=V3_CONFIG.get('calibration_percentile', 95.0),
+        )
+
+        # Extract uncertainty arrays for saving
+        with torch.no_grad():
+            test_output = model(X_test_tensor.to(device))
+            epistemic_u = test_output['epistemic_uncertainty'].cpu().numpy().flatten()
+            evidence = test_output['evidence'].cpu().numpy()
+
+    # 10. Save artifacts
     save_dir = "."
     if os.path.exists("/content/drive/MyDrive"):
         save_dir = "/content/drive/MyDrive/FAIIA_Models"
         os.makedirs(save_dir, exist_ok=True)
         print(f"\nSaving artifacts to Google Drive: {save_dir}")
-        
+
     # Save Metrics CSV
     pd.DataFrame([metrics]).to_csv(os.path.join(save_dir, 'edan_v3_metrics.csv'), index=False)
-    
+
     # Save Model
     save_path = os.path.join(save_dir, 'edan_v3_main.pt')
     torch.save(model.state_dict(), save_path)
@@ -113,8 +178,24 @@ def main():
 
     # Save Predictions (for ROC/PR F7-F8 and Per-Attack Analysis)
     pred_path = os.path.join(save_dir, 'edan_v3_predictions.npz')
-    save_predictions(y_test, y_probs, pred_path)
+    if use_evidential:
+        save_predictions(y_test, y_probs, pred_path,
+                         epistemic_u=epistemic_u, evidence=evidence)
+    else:
+        save_predictions(y_test, y_probs, pred_path)
     print(f"Predictions saved to {pred_path}")
+
+    # Save evidential analysis results
+    if use_evidential:
+        uncertainty_path = os.path.join(save_dir, 'edan_v3_uncertainty_analysis.csv')
+        results_df.to_csv(uncertainty_path, index=False)
+        print(f"Uncertainty analysis saved to {uncertainty_path}")
+
+        # Save calibrated threshold
+        threshold_path = os.path.join(save_dir, 'epistemic_threshold.txt')
+        with open(threshold_path, 'w') as f:
+            f.write(f"{epistemic_threshold:.6f}\n")
+        print(f"Epistemic threshold saved to {threshold_path}")
 
 if __name__ == "__main__":
     main()

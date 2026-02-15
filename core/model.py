@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.cluster import KMeans
+from .evidential import EvidentialOutputLayer
 
 class MinorityPrototypeGenerator:
     def __init__(self, n_prototypes=8, random_state=42):
@@ -188,14 +189,21 @@ class MultiHeadFAIIA(nn.Module):
 class EDANv3(nn.Module):
     """
     E-DAN v3: Edge-Deployable Attention Network with FAIIA
+    
+    Supports two output modes:
+        - Standard (evidential=False): outputs scalar probability or logits (original)
+        - Evidential (evidential=True): outputs Dirichlet evidence, enabling
+          separation of aleatoric and epistemic uncertainty for zero-day detection
     """
     def __init__(self, input_dim, num_heads=4, attention_dim=32, n_prototypes=8,
                  hidden_units=[256, 128, 64], dropout_rate=0.3, attention_dropout=0.1,
-                 focal_alpha=0.60, focal_gamma=2.0, num_classes=1, output_logits=False):
+                 focal_alpha=0.60, focal_gamma=2.0, num_classes=1, output_logits=False,
+                 evidential=False):
         super(EDANv3, self).__init__()
 
         self.input_dim = input_dim
         self.output_logits = output_logits
+        self.evidential = evidential
 
         # Input normalization
         self.input_norm = nn.BatchNorm1d(input_dim)
@@ -248,15 +256,28 @@ class EDANv3(nn.Module):
                 self.residual_projections.append(nn.Identity())
             prev_dim = hidden_dim
 
-        # Final classifier
-        # We separate the final activation to support output_logits=True
-        self.classifier_head = nn.Sequential(
-            nn.Linear(prev_dim, 32),
-            nn.GELU(),
-            nn.Dropout(dropout_rate / 2),
-            nn.Linear(32, num_classes)
-        )
-        # Note: Sigmoid is applied in forward if output_logits is False
+        if self.evidential:
+            # Evidential output: maps features -> 2-class evidence -> Dirichlet
+            # The penultimate layer projects to 32 dims (matching original head),
+            # then the EvidentialOutputLayer maps to K evidence values
+            self.pre_evidential = nn.Sequential(
+                nn.Linear(prev_dim, 32),
+                nn.GELU(),
+                nn.Dropout(dropout_rate / 2),
+            )
+            self.evidential_head = EvidentialOutputLayer(
+                in_features=32,
+                num_classes=2,  # Binary: normal vs attack
+            )
+        else:
+            # Standard classifier head (original behavior)
+            self.classifier_head = nn.Sequential(
+                nn.Linear(prev_dim, 32),
+                nn.GELU(),
+                nn.Dropout(dropout_rate / 2),
+                nn.Linear(32, num_classes)
+            )
+            # Note: Sigmoid is applied in forward if output_logits is False
 
         self.last_attention_info = None
 
@@ -280,23 +301,39 @@ class EDANv3(nn.Module):
             residual = res_proj(h)
             h = block(h) + residual
 
-        # Final classification
-        logits = self.classifier_head(h)
+        if self.evidential:
+            # Evidential output: returns dict with evidence, alpha,
+            # expected probabilities, and both uncertainty types
+            features = self.pre_evidential(h)
+            output = self.evidential_head(features)
 
-        if self.output_logits:
-            output = logits
+            self.last_attention_info = {
+                'initial_prob': p_init.detach(),
+                'faiia_attention': attention_info,
+                'se_weights': se_weights.detach()
+            }
+
+            if return_attention:
+                output['attention_info'] = self.last_attention_info
+            return output
         else:
-            output = torch.sigmoid(logits)
+            # Standard classification (original behavior)
+            logits = self.classifier_head(h)
 
-        self.last_attention_info = {
-            'initial_prob': p_init.detach(),
-            'faiia_attention': attention_info,
-            'se_weights': se_weights.detach()
-        }
+            if self.output_logits:
+                output = logits
+            else:
+                output = torch.sigmoid(logits)
 
-        if return_attention:
-            return output, self.last_attention_info
-        return output
+            self.last_attention_info = {
+                'initial_prob': p_init.detach(),
+                'faiia_attention': attention_info,
+                'se_weights': se_weights.detach()
+            }
+
+            if return_attention:
+                return output, self.last_attention_info
+            return output
 
     def count_parameters(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

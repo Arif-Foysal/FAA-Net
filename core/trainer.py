@@ -9,9 +9,11 @@ from sklearn.metrics import f1_score, recall_score
 def train_model(model, train_loader, val_loader, config, criterion, device):
     """
     Generic training loop for EDAN v3 and ablation models.
+    Supports both standard (sigmoid/logit) and evidential output modes.
     """
     model = model.to(device)
-    
+    is_evidential = getattr(model, 'evidential', False)
+
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=config['learning_rate'],
@@ -28,6 +30,11 @@ def train_model(model, train_loader, val_loader, config, criterion, device):
         'train_recall': [], 'val_recall': [],
         'lr': []
     }
+    if is_evidential:
+        history.update({
+            'train_epistemic_u': [], 'val_epistemic_u': [],
+            'kl_loss': [], 'lambda_t': [],
+        })
 
     best_val_f1 = 0.0
     best_model_state = None
@@ -37,6 +44,9 @@ def train_model(model, train_loader, val_loader, config, criterion, device):
     patience = config.get('patience', 20)
 
     print(f"\n🚀 Training model on {device}...")
+    if is_evidential:
+        annealing_epochs = config.get('annealing_epochs', 10)
+        print(f"   Mode: Evidential Deep Learning (KL annealing over {annealing_epochs} epochs)")
     print("-" * 60)
 
     start_time = time.time()
@@ -46,32 +56,42 @@ def train_model(model, train_loader, val_loader, config, criterion, device):
         model.train()
         train_loss = 0.0
         train_preds, train_labels = [], []
+        epoch_epistemic_u = []
 
         for X_batch, y_batch in train_loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
             optimizer.zero_grad()
 
-            # Label smoothing
-            if label_smooth > 0:
-                y_smooth = y_batch * (1 - label_smooth) + 0.5 * label_smooth
-            else:
-                y_smooth = y_batch
-
             outputs = model(X_batch)
-            loss = criterion(outputs, y_smooth)
+
+            if is_evidential:
+                # Evidential mode: criterion expects output dict and epoch
+                loss_dict = criterion(outputs, y_batch, epoch=epoch)
+                loss = loss_dict['total_loss']
+
+                preds = (outputs['attack_prob'] > 0.5).cpu().numpy().flatten()
+                epoch_epistemic_u.append(
+                    outputs['epistemic_uncertainty'].detach().cpu().mean().item()
+                )
+            else:
+                # Standard mode: apply label smoothing, use scalar loss
+                if label_smooth > 0:
+                    y_smooth = y_batch * (1 - label_smooth) + 0.5 * label_smooth
+                else:
+                    y_smooth = y_batch
+
+                loss = criterion(outputs, y_smooth)
+
+                if getattr(model, 'output_logits', False):
+                    preds = (torch.sigmoid(outputs) > 0.5).cpu().numpy().flatten()
+                else:
+                    preds = (outputs > 0.5).cpu().numpy().flatten()
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             train_loss += loss.item() * X_batch.size(0)
-            
-            # Prediction logic based on output type (logits vs probs)
-            if getattr(model, 'output_logits', False):
-                preds = (torch.sigmoid(outputs) > 0.5).cpu().numpy().flatten()
-            else:
-                preds = (outputs > 0.5).cpu().numpy().flatten()
-                
             train_preds.extend(preds)
             train_labels.extend(y_batch.cpu().numpy().flatten())
 
@@ -85,20 +105,30 @@ def train_model(model, train_loader, val_loader, config, criterion, device):
         model.eval()
         val_loss = 0.0
         val_preds, val_labels = [], []
+        val_epistemic_u = []
 
         with torch.no_grad():
             for X_batch, y_batch in val_loader:
                 X_batch, y_batch = X_batch.to(device), y_batch.to(device)
                 outputs = model(X_batch)
-                loss = criterion(outputs, y_batch)
-                
-                val_loss += loss.item() * X_batch.size(0)
-                
-                if getattr(model, 'output_logits', False):
-                    preds = (torch.sigmoid(outputs) > 0.5).cpu().numpy().flatten()
+
+                if is_evidential:
+                    loss_dict_val = criterion(outputs, y_batch, epoch=epoch)
+                    loss = loss_dict_val['total_loss']
+
+                    preds = (outputs['attack_prob'] > 0.5).cpu().numpy().flatten()
+                    val_epistemic_u.append(
+                        outputs['epistemic_uncertainty'].cpu().mean().item()
+                    )
                 else:
-                    preds = (outputs > 0.5).cpu().numpy().flatten()
-                    
+                    loss = criterion(outputs, y_batch)
+
+                    if getattr(model, 'output_logits', False):
+                        preds = (torch.sigmoid(outputs) > 0.5).cpu().numpy().flatten()
+                    else:
+                        preds = (outputs > 0.5).cpu().numpy().flatten()
+
+                val_loss += loss.item() * X_batch.size(0)
                 val_preds.extend(preds)
                 val_labels.extend(y_batch.cpu().numpy().flatten())
 
@@ -116,6 +146,13 @@ def train_model(model, train_loader, val_loader, config, criterion, device):
         history['val_recall'].append(val_recall)
         history['lr'].append(current_lr)
 
+        if is_evidential:
+            import numpy as np
+            history['train_epistemic_u'].append(np.mean(epoch_epistemic_u) if epoch_epistemic_u else 0.0)
+            history['val_epistemic_u'].append(np.mean(val_epistemic_u) if val_epistemic_u else 0.0)
+            history['kl_loss'].append(loss_dict['kl_loss'].item())
+            history['lambda_t'].append(loss_dict['lambda_t'])
+
         # Early stopping check
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
@@ -126,10 +163,14 @@ def train_model(model, train_loader, val_loader, config, criterion, device):
 
         # Print progress
         if (epoch + 1) % 10 == 0 or epoch == 0:
-            print(f"  Epoch {epoch+1:3d}/{epochs} | "
-                  f"Loss: {train_loss:.4f}/{val_loss:.4f} | "
-                  f"F1: {train_f1:.4f}/{val_f1:.4f} | "
-                  f"Recall: {train_recall:.4f}/{val_recall:.4f}")
+            msg = (f"  Epoch {epoch+1:3d}/{epochs} | "
+                   f"Loss: {train_loss:.4f}/{val_loss:.4f} | "
+                   f"F1: {train_f1:.4f}/{val_f1:.4f} | "
+                   f"Recall: {train_recall:.4f}/{val_recall:.4f}")
+            if is_evidential:
+                msg += (f" | Ep.U: {history['val_epistemic_u'][-1]:.4f}"
+                        f" | λ: {history['lambda_t'][-1]:.3f}")
+            print(msg)
 
         if epochs_no_improve >= patience:
             print(f"\n  ⏹️  Early stopping at epoch {epoch+1} (best F1: {best_val_f1:.4f})")

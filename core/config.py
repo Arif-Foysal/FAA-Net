@@ -16,6 +16,12 @@ V3_CONFIG = {
     'epochs': 150,
     'patience': 20,
     'label_smoothing': 0.05,
+    # Evidential Deep Learning settings
+    'evidential': True,                # Enable EDL output layer
+    'annealing_epochs': 10,            # Epochs to anneal KL regularizer from 0 -> 1
+    'evidential_focal_gamma': 2.0,     # Focal gamma for FocalEvidentialLoss
+    'epistemic_threshold': 0.5,        # Threshold for zero-day escalation
+    'calibration_percentile': 95.0,    # Percentile for ZeroDayDetector calibration
 }
 
 # Features dropped due to high correlation (> 0.95)

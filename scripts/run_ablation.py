@@ -9,10 +9,12 @@ import pandas as pd
 from core.config import V3_CONFIG, RANDOM_STATE
 from core.data_loader import load_and_preprocess_data, create_dataloaders
 from core.ablation import VanillaDNN_Ablation, EDANv3_Ablation
-from core.model import MinorityPrototypeGenerator
+from core.model import MinorityPrototypeGenerator, EDANv3
 from core.loss import ImbalanceAwareFocalLoss_Logits
+from core.evidential import FocalEvidentialLoss, EvidentialLoss
 from core.trainer import train_model
-from core.utils import set_all_seeds, evaluate_model, print_metrics, save_predictions
+from core.utils import (set_all_seeds, evaluate_model, print_metrics,
+                        save_predictions, save_training_history)
 
 def run_experiment(name, model, train_loader, val_loader, test_tensor, y_test, config, criterion, device):
     print(f"\n--- Running Experiment: {name} ---")
@@ -64,6 +66,14 @@ def main():
     # Pos weight for BCEWithLogitsLoss
     pos_weight = torch.tensor([count_negative / count_positive], device=device, dtype=torch.float32)
 
+    # Class weights for evidential loss
+    total_samples = count_positive + count_negative
+    evidential_class_weights = torch.tensor(
+        [total_samples / (2 * count_negative),
+         total_samples / (2 * count_positive)],
+        dtype=torch.float32
+    ).to(device)
+
     results = {}
 
     # --- Experiment 1: Vanilla DNN + BCE ---
@@ -110,6 +120,50 @@ def main():
     criterion_4 = ImbalanceAwareFocalLoss_Logits(class_counts=class_counts, gamma=2.0)
     results['FAIIA + Focal'], _ = run_experiment(
         "FAIIA_Focal", model_4, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_4, device
+    )
+
+    # --- Experiment 5: FAIIA + Evidential Loss (no focal) ---
+    model_5 = EDANv3(
+        input_dim=input_dim, num_heads=V3_CONFIG['num_heads'],
+        attention_dim=V3_CONFIG['attention_dim'],
+        n_prototypes=V3_CONFIG['n_prototypes'],
+        hidden_units=V3_CONFIG['hidden_units'],
+        dropout_rate=V3_CONFIG['dropout_rate'],
+        attention_dropout=V3_CONFIG['attention_dropout'],
+        focal_alpha=V3_CONFIG['focal_alpha'],
+        focal_gamma=V3_CONFIG['focal_gamma'],
+        evidential=True,
+    ).to(device)
+    model_5.faiia.initialize_all_prototypes(prototypes, device)
+    criterion_5 = EvidentialLoss(
+        num_classes=2,
+        annealing_epochs=V3_CONFIG.get('annealing_epochs', 10),
+    ).to(device)
+    results['FAIIA + Evidential'], _ = run_experiment(
+        "FAIIA_Evidential", model_5, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_5, device
+    )
+
+    # --- Experiment 6: FAIIA + Focal Evidential Loss (full model) ---
+    model_6 = EDANv3(
+        input_dim=input_dim, num_heads=V3_CONFIG['num_heads'],
+        attention_dim=V3_CONFIG['attention_dim'],
+        n_prototypes=V3_CONFIG['n_prototypes'],
+        hidden_units=V3_CONFIG['hidden_units'],
+        dropout_rate=V3_CONFIG['dropout_rate'],
+        attention_dropout=V3_CONFIG['attention_dropout'],
+        focal_alpha=V3_CONFIG['focal_alpha'],
+        focal_gamma=V3_CONFIG['focal_gamma'],
+        evidential=True,
+    ).to(device)
+    model_6.faiia.initialize_all_prototypes(prototypes, device)
+    criterion_6 = FocalEvidentialLoss(
+        num_classes=2,
+        annealing_epochs=V3_CONFIG.get('annealing_epochs', 10),
+        gamma=V3_CONFIG.get('evidential_focal_gamma', 2.0),
+        class_weights=evidential_class_weights,
+    ).to(device)
+    results['FAIIA + Focal Evidential'], _ = run_experiment(
+        "FAIIA_FocalEvidential", model_6, train_loader, val_loader, X_test_tensor, y_test, V3_CONFIG, criterion_6, device
     )
 
     # Summary
